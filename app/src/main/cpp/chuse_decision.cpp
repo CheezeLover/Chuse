@@ -45,6 +45,7 @@ struct DecisionModel::Impl {
     const llama_vocab* vocab = nullptr;
     std::map<std::string, float> temperatures;
     int32_t column = 0;
+    int32_t n_embd_out = 0;
 };
 
 DecisionModel::DecisionModel() : impl_(new Impl()) {}
@@ -134,6 +135,7 @@ std::unique_ptr<DecisionModel> DecisionModel::load(const std::string& path, std:
         if (error) *error = "could not create an inference context";
         return nullptr;
     }
+    self->impl_->n_embd_out = llama_model_n_embd_out(model);
     return self;
 }
 
@@ -160,6 +162,9 @@ std::string DecisionModel::render_prompt(
     // Mirrors tokenizer.chat_template.systemone from the GGUF. Reimplemented rather than run
     // through Jinja: this is ~1.5 KB of known text branching only on question type, and an
     // interpreter would cost far more than these lines.
+    //
+    // Laya is not one of the joint "clef" models — those use <<clef:option>> markers and a
+    // different fill_task path. Laya keeps [MASK] per option, which is what layout() keys on.
     std::string prompt = "[CLS]";
     prompt += type_name(type);
     prompt += " question: ";
@@ -174,21 +179,14 @@ std::string DecisionModel::render_prompt(
             prompt += ": ";
             prompt += option_descriptions[i];
         } else if (type == QuestionType::Noul) {
-            // Short and symmetric, on purpose. The GGUF's fallback wording is
-            // "yes, the statement holds" versus "no, the statement does not hold", and
-            // measuring the real model showed that phrasing biases answers negative: it is
-            // longer and more emphatic on the false side. Across nine cases it answered 6/9
-            // against 8/9 for "true"/"false", and it was confidently wrong on plainly true
-            // statements — the model is weak on true, and this wording made it worse.
-            //
-            // See tools/noul_wording_probe.cpp, and docs/laya-measured.md.
+            // Symmetric by design. The GGUF's fallback wording ("yes, the statement holds"
+            // versus "no, the statement does not hold") is longer and more emphatic on the
+            // false side, and measurably biases answers negative — see
+            // tools/noul_wording_probe.cpp.
             prompt += option_keys[i];
             prompt += ": ";
             prompt += option_descriptions[i].empty() ? option_keys[i] : option_descriptions[i];
         } else {
-            // Choice renders the key alone unless it has a description. The earlier code let
-            // this fall into the noul branch, which printed "no, the statement does not hold"
-            // after every option — a prompt the model was never trained to read.
             prompt += option_keys[i];
             if (!option_descriptions[i].empty()) {
                 prompt += ": ";
@@ -293,6 +291,57 @@ bool DecisionModel::layout(
     return true;
 }
 
+int32_t DecisionModel::n_embd_out() const { return impl_->n_embd_out; }
+
+bool DecisionModel::probe_embeddings(
+    const std::string& instructions,
+    const std::string& state,
+    QuestionType type,
+    const std::vector<std::string>& option_keys,
+    const std::vector<std::string>& option_descriptions,
+    std::vector<std::vector<float>>* rows_out,
+    std::string* error) {
+
+    const std::string prompt =
+        render_prompt(instructions, state, type, option_keys, option_descriptions);
+    std::vector<int32_t> tokens = tokenize(prompt);
+    if (tokens.empty()) {
+        if (error) *error = "could not tokenize the decision prompt";
+        return false;
+    }
+    std::vector<size_t> markers;
+    if (!layout(&tokens, option_keys.size(), &markers, error)) return false;
+
+    llama_batch batch = llama_batch_init(static_cast<int32_t>(tokens.size()), 0, 1);
+    batch.n_tokens = static_cast<int32_t>(tokens.size());
+    for (size_t i = 0; i < tokens.size(); i++) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = static_cast<llama_pos>(i);
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = 0;
+    }
+    for (const size_t marker : markers) batch.logits[marker] = 1;
+
+    const int32_t rc = llama_encode(impl_->ctx, batch);
+    llama_batch_free(batch);
+    if (rc != 0) {
+        if (error) *error = "the model failed to evaluate the decision";
+        return false;
+    }
+
+    rows_out->clear();
+    for (const size_t marker : markers) {
+        const float* embd = llama_get_embeddings_ith(impl_->ctx, static_cast<int32_t>(marker));
+        if (embd == nullptr) {
+            if (error) *error = "could not read embeddings";
+            return false;
+        }
+        rows_out->emplace_back(embd, embd + impl_->n_embd_out);
+    }
+    return true;
+}
+
 bool DecisionModel::score(
     const std::string& instructions,
     const std::string& state,
@@ -304,6 +353,14 @@ bool DecisionModel::score(
 
     if (option_keys.size() < 2 || option_keys.size() != option_descriptions.size()) {
         if (error) *error = "a decision needs at least two options";
+        return false;
+    }
+    // The state is required, not optional. Upstream's /decide rejects a request without one,
+    // and measuring the real model shows why: with a state it answers 18/20 on a balanced
+    // set, without one it manages 12/20 with everything near 0.5. The question alone reads as
+    // a weak negative tilt rather than as the uncertainty it actually is.
+    if (instructions.empty() || state.empty()) {
+        if (error) *error = "a decision needs both a question and something to judge";
         return false;
     }
 

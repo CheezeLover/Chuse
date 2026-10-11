@@ -74,6 +74,24 @@ public:
     std::vector<int32_t> tokenize(const std::string& text) const;
     std::string detokenize(const std::vector<int32_t>& tokens) const;
 
+    /**
+     * Raw embeddings for one marker position, for diagnostics only.
+     *
+     * Exposed so a probe can inspect the whole row rather than inferring the layout from
+     * what `score` returns. Not used by the app.
+     */
+    bool probe_embeddings(
+        const std::string& instructions,
+        const std::string& state,
+        QuestionType type,
+        const std::vector<std::string>& option_keys,
+        const std::vector<std::string>& option_descriptions,
+        std::vector<std::vector<float>>* rows_out,
+        std::string* error);
+
+    /** How many values each marker's embeddings row holds. */
+    int32_t n_embd_out() const;
+
     size_t max_head_tokens() const { return max_head_tokens_; }
     int32_t mask_token() const { return token_mask_; }
     int32_t sep_token() const { return token_sep_; }

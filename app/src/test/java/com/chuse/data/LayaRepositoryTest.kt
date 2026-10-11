@@ -106,22 +106,40 @@ class LayaRepositoryTest {
     }
 
     @Test
-    fun `a yes-no question needs no state`() = runBlocking {
+    fun `a yes-no question is answered with both fields`() = runBlocking {
         val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
         val repository = LayaRepository { scorer }
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
-        // The single-field UI sends no situation at all. The model was measured with an empty
-        // state and still answers, which is what makes that possible.
         val result = repository.decide(
             Question.Noul("answer", "Is the sky blue during the day?", BooleanCriteria()),
+            "The sky is blue.",
         ) as DecisionResult.Noul
 
-        assertEquals("", scorer.lastState)
+        assertEquals("The sky is blue.", scorer.lastState)
         assertEquals(listOf("true", "false"), scorer.lastOptions)
         assertEquals(QuestionType.Noul, scorer.lastType)
         assertTrue("noul was ${result.noul}", result.noul > 0.7)
+        repository.close()
+    }
+
+    @Test
+    fun `a yes-no question without a state is refused`() = runBlocking {
+        val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
+        val repository = LayaRepository { scorer }
+        repository.start("/models/laya.gguf")
+        awaitReady(repository)
+
+        // Measured on the real model: 18/20 on a balanced set with a state, 12/20 without,
+        // with every probability sitting near a coin flip. The interface asks for both fields
+        // rather than shipping answers that read as a negative tilt.
+        val failure = runCatching {
+            repository.decide(Question.Noul("answer", "Is the sky blue during the day?"), "")
+        }.exceptionOrNull()
+
+        assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
+        assertTrue("the scorer should not have run", scorer.lastOptions.isEmpty())
         repository.close()
     }
 
@@ -158,6 +176,7 @@ class LayaRepositoryTest {
                     Question.Choice.Option("tablet", ""),
                 ),
             ),
+        "The sky is blue.",
         ) as DecisionResult.Choice
 
         // Order matters: the scorer's array lines up positionally with the option list, so
@@ -177,6 +196,7 @@ class LayaRepositoryTest {
 
         val result = repository.decide(
             Question.Score("answer", "How severe is this?", listOf("low", "high")),
+        "The sky is blue.",
         ) as DecisionResult.Score
 
         assertEquals(listOf("0", "1"), scorer.lastOptions)
@@ -192,7 +212,7 @@ class LayaRepositoryTest {
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
-        repository.decide(Question.Score("answer", "Rate.", listOf("low", "high")))
+        repository.decide(Question.Score("answer", "Rate.", listOf("low", "high")), "The sky is blue.")
         assertEquals(1.25143f, scorer.lastTemperature, 1e-4f)
         repository.close()
     }
@@ -206,6 +226,7 @@ class LayaRepositoryTest {
         val failure = runCatching {
             repository.decide(
                 Question.Choice("answer", "Pick.", listOf(Question.Choice.Option("only", ""))),
+            "The sky is blue.",
             )
         }.exceptionOrNull()
 
@@ -218,7 +239,7 @@ class LayaRepositoryTest {
         val scorer = StandInScorer()
         fun ask(instructions: String) = scorer.score(
             ScoringRequest(
-                state = "",
+                state = "The sky is blue.",
                 instructions = instructions,
                 type = QuestionType.Choice,
                 options = listOf(
@@ -246,7 +267,7 @@ class LayaRepositoryTest {
 
         // Each of the three modes must produce a usable shape with no GGUF present, since a
         // build without one still has to be demoable.
-        val noul = repository.decide(Question.Noul("a", "Is it true?"))
+        val noul = repository.decide(Question.Noul("a", "Is it true?"), "The sky is blue.")
         val choice = repository.decide(
             Question.Choice(
                 "b",
@@ -256,9 +277,11 @@ class LayaRepositoryTest {
                     Question.Choice.Option("y", ""),
                 ),
             ),
+        "The sky is blue.",
         )
         val score = repository.decide(
             Question.Score("c", "How severe?", listOf("low", "high")),
+        "The sky is blue.",
         )
 
         assertTrue(noul is DecisionResult.Noul)

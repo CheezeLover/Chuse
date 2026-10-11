@@ -166,6 +166,7 @@ class LayaEngineTest {
         val engine = engineWith("low" to 0f, "high" to 0f)
         val result = engine.decide(
             Question.Score("s", "Rate it.", listOf("low", "high")),
+            "The sky is blue.",
         ) as DecisionResult.Score
         assertEquals(0.5, result.score, 1e-6)
     }
@@ -177,6 +178,7 @@ class LayaEngineTest {
         val engine = engineWith("true" to 3f, "false" to 0f)
         val result = engine.decide(
             Question.Noul("ok", "Is this true?"),
+            "The sky is blue.",
         ) as DecisionResult.Noul
 
         assertTrue("noul was ${result.noul}", result.noul > 0.7)
@@ -201,6 +203,7 @@ class LayaEngineTest {
         )
         val result = engine.decide(
             Question.Noul("q", "Is the invoice correct?", BooleanCriteria("holds", "fails")),
+            "The sky is blue.",
         ) as DecisionResult.Noul
 
         assertEquals(listOf("true", "false"), seen!!.options.map { it.key })
@@ -221,6 +224,7 @@ class LayaEngineTest {
                     Question.Choice.Option("tablet", "A large touch device"),
                 ),
             ),
+        "The sky is blue.",
         ) as DecisionResult.Choice
 
         assertEquals("laptop", result.choice)
@@ -241,6 +245,7 @@ class LayaEngineTest {
                     Question.Choice.Option("beta", "Second"),
                 ),
             ),
+        "The sky is blue.",
         ) as DecisionResult.Choice
 
         assertEquals("alpha", result.choice)
@@ -260,6 +265,7 @@ class LayaEngineTest {
                 "Rate the severity.",
                 listOf("negligible", "minor", "major", "catastrophic"),
             ),
+        "The sky is blue.",
         ) as DecisionResult.Score
 
         assertEquals(
@@ -283,6 +289,7 @@ class LayaEngineTest {
         )
         engine.decide(
             Question.Score("s", "Rate.", listOf("low", "medium", "high")),
+            "The sky is blue.",
         )
         assertEquals(listOf("0", "1", "2"), seen!!.options.map { it.key })
         assertEquals(listOf("low", "medium", "high"), seen!!.options.map { it.description })
@@ -297,7 +304,7 @@ class LayaEngineTest {
                 FloatArray(request.options.size) { 0f }
             },
         )
-        engine.decide(Question.Noul("q", "True?"))
+        engine.decide(Question.Noul("q", "True?"), "The sky is blue.")
         assertEquals(listOf("true", "false"), seen!!.options.map { it.key })
     }
 
@@ -319,6 +326,7 @@ class LayaEngineTest {
                     Question.Choice.Option("b", "B"),
                 ),
             ),
+        "The sky is blue.",
         )
         assertEquals(1.906356f, seen, 1e-4f)
     }
@@ -355,7 +363,7 @@ class LayaEngineTest {
     }
 
     @Test
-    fun `an empty state is answered rather than rejected`() {
+    fun `an empty state is rejected because a question alone is too weak`() {
         var called = false
         val engine = LayaEngine(
             CandidateScorer { _, _ ->
@@ -363,12 +371,15 @@ class LayaEngineTest {
                 floatArrayOf(0f, 0f)
             },
         )
-        // An empty state is legal and is what a single-field UI sends, so this must answer
-        // rather than throw. The model was measured with no state and still returns a usable
-        // distribution — see docs/laya-measured.md.
-        val result = engine.decide(Question.Noul("n", "Is it true?"))
-        assertTrue("the scorer should have run", called)
-        assertTrue(result is DecisionResult.Noul)
+        // Measured on a balanced 20-case set: 18/20 with a state, 12/20 without, with every
+        // probability near a coin flip. Accepting an empty state produced answers that read as
+        // a negative tilt rather than as the uncertainty they were.
+        val failure = runCatching {
+            engine.decide(Question.Noul("n", "Is it true?"), "")
+        }.exceptionOrNull()
+
+        assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
+        assertTrue("the scorer should not have run", !called)
     }
 
     @Test
@@ -381,13 +392,13 @@ class LayaEngineTest {
             },
         )
         assertThrows(IllegalArgumentException::class.java) {
-            engine.decide(Question.Noul("n", "   "))
+            engine.decide(Question.Noul("n", "   "), "The sky is blue.")
         }
         assertTrue("the scorer should not have run", !called)
     }
 
     @Test
-    fun `state is passed to the scorer verbatim, including when empty`() {
+    fun `state is passed to the scorer verbatim`() {
         var seen: String? = null
         val engine = LayaEngine(
             CandidateScorer { request, _ ->
@@ -397,10 +408,6 @@ class LayaEngineTest {
         )
         engine.decide(Question.Noul("n", "Is it true?"), "The invoice total is wrong.")
         assertEquals("The invoice total is wrong.", seen)
-
-        seen = null
-        engine.decide(Question.Noul("n", "Is it true?"))
-        assertEquals("", seen)
     }
 
     @Test
@@ -429,6 +436,7 @@ class LayaEngineTest {
                         Question.Choice.Option("b", "B"),
                     ),
                 ),
+            "The sky is blue.",
             )
         }
     }
@@ -445,6 +453,7 @@ class LayaEngineTest {
                     Question.Choice.Option("b", "Unseen"),
                 ),
             ),
+        "The sky is blue.",
         ) as DecisionResult.Choice
         assertEquals(1.0, result.probabilities.values.sum(), 1e-6)
         assertTrue(result.probabilities.getValue("b") > 0.0)
@@ -454,7 +463,7 @@ class LayaEngineTest {
     fun `probabilities stay inside the unit interval for every question type`() {
         val engine = engineWith("a" to 3f, "b" to 1f, "c" to -2f)
         val results = listOf(
-            engine.decide(Question.Noul("q", "True?")),
+            engine.decide(Question.Noul("q", "True?"), "The sky is blue."),
             engine.decide(
                 Question.Choice(
                     "c",
@@ -465,8 +474,9 @@ class LayaEngineTest {
                         Question.Choice.Option("c", "C"),
                     ),
                 ),
+            "The sky is blue.",
             ),
-            engine.decide(Question.Score("s", "Rate.", listOf("low", "mid", "high"))),
+            engine.decide(Question.Score("s", "Rate.", listOf("low", "mid", "high")), "The sky is blue."),
         )
         for (result in results) {
             assertTrue("$result", result.confidence in 0.0..1.0)

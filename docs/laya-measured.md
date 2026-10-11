@@ -7,13 +7,26 @@ same `chuse_decision.cpp` the app uses. Regenerate with:
 ./scripts/fetch-llama.sh
 cmake -B /tmp/probe -S app/src/main/cpp -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF \
       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
-cmake --build /tmp/probe --target decision_probe noul_wording_probe noul_order_probe -j
+cmake --build /tmp/probe --target decision_probe noul_bias_probe noul_order_probe \
+                             noul_wording_probe offset_probe signal_probe -j
 /tmp/probe/decision_probe app/src/main/assets/model.gguf
+/tmp/probe/noul_bias_probe app/src/main/assets/model.gguf
 ```
 
-The `noul_*` probes answer specific questions the main probe cannot:
-`noul_order_probe` settles whether the two yes/no columns are swapped, and
-`noul_wording_probe` measures how the option wording moves the answers.
+Each probe answers one question the others cannot:
+
+| Probe | Question it settles |
+|---|---|
+| `decision_probe` | What do the prompts and scores look like? |
+| `noul_bias_probe` | Is there a real yes/no bias, and does wording move it? |
+| `noul_order_probe` | Are the two yes/no columns swapped? (They are not.) |
+| `noul_wording_probe` | How much does the option wording matter? |
+| `offset_probe` | Which value of the embeddings row carries the score? |
+| `signal_probe` | Do state and instructions actually move the scores? |
+
+`offset_probe` reported byte-identical embeddings for different questions, which `signal_probe`
+then showed was an artefact of that probe. Both are kept: the first is what raised the question
+and the second is what answered it.
 
 ## Why this file exists
 
@@ -32,71 +45,72 @@ model actually ran:
    the *choice* head — the worst kind of bug, because the output looked like a real
    probability rather than an error.
 
-## The negative bias, and what caused it
+## The negative bias, and what it actually was
 
-Yes/no answers leaned false. The obvious suspect — the two options being swapped — is wrong,
-and was worth ruling out rather than assuming.
+Reported twice, and the first two explanations were both wrong. The record matters more than
+the conclusion, because the wrong answers were all plausible.
 
-`tools/noul_order_probe.cpp` renders each case both ways. **Both orderings score exactly the
-same** across nine cases: 6/9 either way, which is no better than chance. So no column swap
-fixes it.
+**Not a column swap.** llama.cpp builds noul options as `[false, true]` for Laya while the app
+rendered `[true, false]`, which looks exactly like the symptom. `tools/noul_order_probe.cpp`
+renders every case both ways: both orderings score exactly 6/9, which is chance. Swapping would
+have flipped the sign and changed nothing.
 
-The real cause is the **wording** of the options. The GGUF's `systemone` template supplies a
-fallback when a `noul` has no criteria:
+**Not the option wording, either — though wording does matter.** The GGUF's fallback is
+`yes, the statement holds` versus `no, the statement does not hold`, which is not symmetric. On
+a balanced twenty-case set the wording makes a small difference and none of it is the main
+effect:
 
-```
-[MASK] true: yes, the statement holds[SEP]
-[MASK] false: no, the statement does not hold[SEP]
-```
+| Option wording | Correct | Mean P(true) when true | Mean P(true) when false |
+|---|---:|---:|---:|
+| Bare keys | 18/20 | 0.711 | 0.235 |
+| `true` / `false` | 18/20 | 0.711 | 0.235 |
+| `yes` / `no` | 17/20 | 0.712 | 0.200 |
+| GGUF long fallback | 17/20 | 0.711 | 0.190 |
 
-Those two phrases are not symmetric. The false one is longer and more emphatic, and the model
-leans into it. `tools/noul_wording_probe.cpp` measures the alternatives on the same nine
-cases:
+Bare keys are kept, but they are worth one or two cases, not the effect being chased.
 
-| Option wording | Correct | Mean P(true) |
-|---|---:|---:|
-| GGUF fallback (long) | 6/9 | 0.483 |
-| Short symmetric | 8/9 | 0.562 |
-| `true` / `false` keywords | 8/9 | 0.576 |
-| **Bare keys (no description)** | **8/9** | **0.576** |
+**A measurement artefact nearly sent this the wrong way too.** `offset_probe` reported two
+opposite questions returning byte-identical embeddings. That is impossible if the read position
+carries the answer, so it was worth chasing: `signal_probe` showed the scores do move correctly
+with both state and instructions, and repeat identically for identical input. The identical rows
+were an artefact of that probe, not a property of the model. Recorded here because the instinct
+on seeing impossible output is to trust it and look for a bug elsewhere.
 
-Two concrete failures of the long phrasing, both of which the short form fixes:
+**The actual cause: the state was optional when it should not have been.** An earlier
+measurement appeared to show that a question alone still answered usefully, and the interface
+was simplified to one field on that basis. On a balanced set it does not:
 
-| Case | Long fallback | Bare keys |
-|---|---|---|
-| "Is this statement true?" / "Water boils at 100C at sea level." | 0.374 → **False** | 0.652 → **True** |
-| "Is the sky blue during the day?" / "The sky is blue." | 0.473 → **False** | 0.618 → **True** |
+| Input | Correct | Mean P(true) when true | Mean P(true) when false | Gap |
+|---|---:|---:|---:|---:|
+| Question **and** state | **18/20** | 0.711 | 0.235 | +0.476 |
+| Question alone | 12/20 | 0.475 | 0.364 | +0.111 |
 
-Both are obviously true statements, and the long wording answered both wrongly. This
-compounds a weakness already visible above: the model is reliable on false and weak on true,
-and the fallback phrasing made the true side worse still.
+Without a state every probability sits near a coin flip and the gap nearly vanishes. That reads
+to a user as a lean towards false — a model that is uncertain and quiet looks like a model that
+is confident and wrong. Upstream agrees: `/decide` rejects a request with no `state`.
 
-**The fix**: a `noul` with no criteria now sends the key as its own description, so the model
-reads `true: true` and `false: false` — symmetric, and what it was trained on. A user who
-supplies their own wording still has it passed through verbatim.
+The state is now required, the engine rejects an empty one, and the interface asks for both
+fields with the context one always visible rather than hidden behind a toggle.
 
 ### What remains weak
 
 One case fails under every wording: "Does ice melt at room temperature?" against the state
 "Ice does not melt at room temperature." The model answers True at 0.85, because the
 instruction and the state contradict each other and it appears to weight the instruction's
-polarity over the negated state. That looks like a genuine limitation of the checkpoint
-rather than a prompt defect, and it is left visible rather than papered over.
+polarity over the negated state. That looks like a limitation of the checkpoint rather than a
+prompt defect, and it is left visible rather than papered over.
 
 ## Answers
 
-### A question alone, with no separate statement, works
-
-The `state` segment of the prompt may be empty. The model still returns a usable
-distribution, which is what makes a one-field UI possible:
+### The state is required
 
 | Input | true | false |
 |---|---|---|
 | "Is the sky blue during the day?" + "The sky is green." | 0.070 | **0.930** |
-| "Is the sky blue during the day?" + *(nothing)* | **0.700** | 0.300 |
+| "Is the sky blue during the day?" + "The sky is blue." | **0.618** | 0.382 |
 
-With a stated fact the model is sharp and correctly confident. With only the question it
-still leans, less decisively — which is the expected behaviour, since there is less to judge.
+With a state the model is sharp in both directions. Without one it answers, but at near chance
+— see [the bias section](#the-negative-bias-and-what-it-actually-was).
 
 ### Yes/no with a stated fact
 

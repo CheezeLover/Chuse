@@ -62,7 +62,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,7 +100,6 @@ fun ChatScreen(viewModel: LayaViewModel) {
     var mode by remember { mutableStateOf(Mode.YesNo) }
     var question by remember { mutableStateOf("") }
     var context by remember { mutableStateOf("") }
-    var contextVisible by rememberSaveable { mutableStateOf(false) }
     var choices by remember { mutableStateOf(listOf("", "")) }
     var levels by remember { mutableStateOf(DefaultLevels) }
 
@@ -175,8 +173,9 @@ fun ChatScreen(viewModel: LayaViewModel) {
 
                         else -> WelcomeBlock(
                             mode = mode,
-                            onSuggestion = { suggestion ->
-                                question = suggestion
+                            onSuggestion = { q, c ->
+                                question = q
+                                context = c
                             },
                         )
                     }
@@ -196,14 +195,12 @@ fun ChatScreen(viewModel: LayaViewModel) {
                     onQuestionChange = { question = it },
                     context = context,
                     onContextChange = { context = it },
-                    contextVisible = contextVisible,
-                    onContextToggle = { contextVisible = !contextVisible },
                     choices = choices,
                     onChoicesChange = { choices = it },
                     levels = levels,
                     onLevelsChange = { levels = it },
                     working = working,
-                    canAsk = question.isNotBlank() && valid(mode, choices, levels),
+                    canAsk = question.isNotBlank() && context.isNotBlank() && valid(mode, choices, levels),
                     onAsk = ::ask,
                 )
             }
@@ -331,7 +328,7 @@ private fun PulsingDot(color: Color, size: androidx.compose.ui.unit.Dp = 7.dp) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun WelcomeBlock(mode: Mode, onSuggestion: (String) -> Unit) {
+private fun WelcomeBlock(mode: Mode, onSuggestion: (String, String) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -366,35 +363,52 @@ private fun WelcomeBlock(mode: Mode, onSuggestion: (String) -> Unit) {
  * three real ones teaches the shape of a good input faster than instructions would.
  */
 @Composable
-private fun SuggestionRow(mode: Mode, onSuggestion: (String) -> Unit) {
+private fun SuggestionRow(mode: Mode, onSuggestion: (String, String) -> Unit) {
+    // Both halves of each example, because both fields are required. An example that only
+    // filled the question would teach the shape that produces near-chance answers.
     val suggestions = when (mode) {
         Mode.YesNo -> listOf(
-            R.string.example_yesno_1,
-            R.string.example_yesno_2,
-            R.string.example_yesno_3,
+            Triple(R.string.example_yesno_q1, R.string.example_yesno_c1, R.string.example_yesno_1),
+            Triple(R.string.example_yesno_q2, R.string.example_yesno_c2, R.string.example_yesno_2),
+            Triple(R.string.example_yesno_q3, R.string.example_yesno_c3, R.string.example_yesno_3),
         )
 
-        Mode.Choice -> listOf(R.string.example_choice_1, R.string.example_choice_2)
-        Mode.Score -> listOf(R.string.example_score_1, R.string.example_score_2)
+        Mode.Choice -> listOf(
+            Triple(R.string.example_choice_q1, R.string.example_choice_c1, R.string.example_choice_1),
+            Triple(R.string.example_choice_q2, R.string.example_choice_c2, R.string.example_choice_2),
+        )
+
+        Mode.Score -> listOf(
+            Triple(R.string.example_score_q1, R.string.example_score_c1, R.string.example_score_1),
+            Triple(R.string.example_score_q2, R.string.example_score_c2, R.string.example_score_2),
+        )
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        suggestions.forEach { res ->
+        suggestions.forEach { (questionRes, contextRes, labelRes) ->
             // Resolved here rather than inside the click handler: stringResource is
             // @Composable and the lambda is not a composable scope.
-            val label = stringResource(res)
+            val question = stringResource(questionRes)
+            val context = stringResource(contextRes)
             Surface(
-                onClick = { onSuggestion(label) },
+                onClick = { onSuggestion(question, context) },
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.widthIn(max = 340.dp),
             ) {
-                Text(
-                    text = stringResource(res),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                )
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                    Text(
+                        text = stringResource(labelRes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = context,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -785,8 +799,6 @@ private fun Composer(
     onQuestionChange: (String) -> Unit,
     context: String,
     onContextChange: (String) -> Unit,
-    contextVisible: Boolean,
-    onContextToggle: () -> Unit,
     choices: List<String>,
     onChoicesChange: (List<String>) -> Unit,
     levels: List<String>,
@@ -825,11 +837,11 @@ private fun Composer(
             LevelFields(levels, onLevelsChange)
         }
 
-        // Always available, but tucked away in yes/no where one field is the whole promise. It was
-        // previously shown only when non-empty or in another mode, which left no way to open
-        // it at all — the one control that most improves an answer you cannot see.
+        // Always shown, and required. It was hidden behind a toggle on the strength of a
+        // mismeasured claim that the question alone sufficed; measured properly, the question
+        // alone is near chance. See docs/laya-measured.md.
         AnimatedVisibility(
-            visible = contextVisible || context.isNotEmpty(),
+            visible = true,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically(),
         ) {
@@ -842,14 +854,6 @@ private fun Composer(
                 singleLine = false,
                 imeAction = ImeAction.Default,
             )
-        }
-
-        AnimatedVisibility(
-            visible = !contextVisible && context.isEmpty(),
-            enter = fadeIn(),
-            exit = fadeOut(),
-        ) {
-            AddRowButton(R.string.action_add_context) { onContextToggle() }
         }
 
         Surface(

@@ -10,18 +10,19 @@ enum class QuestionType(val wireCode: Int) {
 /**
  * One question to put to the model.
  *
- * This mirrors what a decision model actually consumes — a question, an optional situation to
- * judge it against, and the options being compared — rather than a prompt string. The
- * rendering is the backend's job, because the template belongs to the model: Laya's layout is
- * fixed in its GGUF, and a different checkpoint should need no Kotlin change.
+ * This mirrors what a decision model actually consumes — a question, the situation to judge
+ * it against, and the options being compared — rather than a prompt string. The rendering is
+ * the backend's job, because the template belongs to the model: Laya's layout is fixed in its
+ * GGUF, and a different checkpoint should need no Kotlin change.
  *
- * [state] is optional. Measured against the real model (`docs/laya-measured.md`): with a
- * statement the model is sharp and decisive; with an empty one it still answers, but flattens
- * toward chance. A question alone is enough to be useful, which is what lets the UI ask
- * without a second field.
+ * [state] is **not** optional. It is tempting to allow a question alone, since the interface
+ * reads better that way, but measuring the real model showed the question carries very little
+ * on its own: on a balanced 20-case set it answers 18/20 with a state and 12/20 — barely
+ * better than chance — without one, and every probability sits near 0.5. That reads to a user
+ * as a negative tilt rather than as the uncertainty it is. See `docs/laya-measured.md`.
  *
- * [options] is ordered: [options] pairs with the returned scores positionally, and for a
- * `Score` question each entry's `key` is the level's index rather than a user-facing label.
+ * [options] is ordered: it pairs with the returned scores positionally, and for a `Score`
+ * question each entry's `key` is the level's index rather than a user-facing label.
  */
 data class ScoringRequest(
     val state: String,
@@ -30,6 +31,7 @@ data class ScoringRequest(
     val options: List<Candidate>,
 ) {
     init {
+        require(state.isNotBlank()) { "a decision needs something to judge" }
         require(instructions.isNotBlank()) { "instructions must not be blank" }
         require(options.size >= 2) { "a decision needs at least two options" }
     }

@@ -6,18 +6,19 @@ the answer with how sure the model is. One page, one input, no history.
 The model runs entirely on the device. The app declares no permissions and opens no
 sockets; there is nothing to send and nothing to store.
 
-One field asks everything. A chip row picks the mode; picking **Choices** or **Score** grows
+Two fields ask everything. A chip row picks the mode; picking **Choices** or **Score** grows
 the input zone to add the options or the scale, and nothing else changes.
 
 | Mode | Asks | Returns |
 |---|---|---|
-| **Yes / no** | a question | P(true), and how sure it is |
-| **Choices** | a question and two or more options | every option ranked, with probabilities |
-| **Score** | a question and an optional scale | an expected level and the level it maps to |
+| **Yes / no** | a question and the situation | P(true), and how sure it is |
+| **Choices** | a question, a situation, and two or more options | every option ranked |
+| **Score** | a question, a situation, and an optional scale | an expected level and its label |
 
-A second **Context** field is available in every mode and is genuinely optional. Measured
-against the real model, adding it sharpens the answer substantially and omitting it still
-works — see [`docs/laya-measured.md`](docs/laya-measured.md).
+Both fields are required, and that is a measured decision rather than a formality. On a
+balanced twenty-case set the model answers **18/20** with a situation and **12/20** without
+one, with every probability sitting near a coin flip — which reads to a user as a lean towards
+false. See [`docs/laya-measured.md`](docs/laya-measured.md).
 
 ## Status
 

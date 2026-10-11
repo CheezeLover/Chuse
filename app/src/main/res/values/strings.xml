@@ -10,18 +10,39 @@
     <string name="prompt_start">Ask Laya a question</string>
     <string name="prompt_subtitle">One question, one answer. No memory of what came before.</string>
 
+    <!-- Examples: each has a question and the context it should be judged against, because
+         both are required for a meaningful answer. -->
     <string name="example_yesno_1">Is the sky blue during the day?</string>
+    <string name="example_yesno_q1">Is the sky blue during the day?</string>
+    <string name="example_yesno_c1">The sky is blue.</string>
+
     <string name="example_yesno_2">Can a phone run a model entirely offline?</string>
-    <string name="example_yesno_3">Is it safe to delete the backup before a migration?</string>
-    <string name="example_choice_1">Which is the best next step after a failed deploy?</string>
+    <string name="example_yesno_q2">Can a phone run a model entirely offline?</string>
+    <string name="example_yesno_c2">The model runs on the phone itself, with no server.</string>
+
+    <string name="example_yesno_3">Is it safe to delete the backup first?</string>
+    <string name="example_yesno_q3">Is it safe to delete the backup first?</string>
+    <string name="example_yesno_c3">A verified backup exists and the migration has been tested.</string>
+
+    <string name="example_choice_1">Best next step after a failed deploy?</string>
+    <string name="example_choice_q1">Which is the best next step after a failed deploy?</string>
+    <string name="example_choice_c1">The deploy failed and the previous release was rolled back.</string>
+
     <string name="example_choice_2">How should an invoice mismatch be handled?</string>
-    <string name="example_score_1">How severe is an outage that lasted 4 hours?</string>
-    <string name="example_score_2">How confident are you that this refactor is safe?</string>
+    <string name="example_choice_q2">How should this invoice mismatch be handled?</string>
+    <string name="example_choice_c2">The invoice total does not match the purchase order.</string>
+
+    <string name="example_score_1">How severe is a 4-hour outage?</string>
+    <string name="example_score_q1">How severe is this incident?</string>
+    <string name="example_score_c1">The service was unavailable for four hours.</string>
+
+    <string name="example_score_2">How confident are you in this refactor?</string>
+    <string name="example_score_q2">How confident should I be in this refactor?</string>
+    <string name="example_score_c2">It touches payment code and has no test coverage.</string>
 
     <!-- Input -->
     <string name="hint_question">Ask something…</string>
-    <string name="hint_optional_context">Optional context — what should it judge?</string>
-    <string name="action_add_context">Add context</string>
+    <string name="hint_optional_context">What should it judge? Both fields are needed.</string>
     <string name="label_choice">Choice %1$d</string>
     <string name="action_add_choice">Add another choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>
