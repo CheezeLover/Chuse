@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <thread>
 #include <vector>
 
 #include "llama.h"
@@ -125,8 +127,19 @@ std::unique_ptr<DecisionModel> DecisionModel::load(const std::string& path, std:
     llama_context_params context_params = llama_context_default_params();
     context_params.n_ctx = 2048;
     context_params.n_batch = 512;
-    context_params.n_threads = 4;
-    context_params.n_threads_batch = 4;
+    // Default: everything the machine has, capped at 8. A hardcoded 4 leaves a phone's big
+    // cores idle; past 8 the memory bus, not the core count, is the limit. CHUSE_THREADS
+    // exists so device tuning and the latency probe can compare without a rebuild.
+    const int threads = [] {
+        if (const char* forced = std::getenv("CHUSE_THREADS")) {
+            const int parsed = std::atoi(forced);
+            if (parsed >= 1 && parsed <= 64) return parsed;
+        }
+        const unsigned hw = std::thread::hardware_concurrency();
+        return static_cast<int>(std::min(8u, std::max(4u, hw == 0 ? 4u : hw)));
+    }();
+    context_params.n_threads = threads;
+    context_params.n_threads_batch = threads;
     context_params.embeddings = true;
     context_params.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
@@ -136,6 +149,17 @@ std::unique_ptr<DecisionModel> DecisionModel::load(const std::string& path, std:
         return nullptr;
     }
     self->impl_->n_embd_out = llama_model_n_embd_out(model);
+
+    // One throwaway decision at load time. The model is mmapped, so the first real question
+    // would otherwise pay the page-in of 429 MB of weights — a stall the user reads as the
+    // answer being slow when it is really the load being unfinished. Failure is ignored: a
+    // warm-up must never decide whether the model counts as loaded.
+    {
+        std::vector<float> ignored_scores;
+        std::string ignored_error;
+        self->score("warmup", "warmup", QuestionType::Noul, {"true", "false"},
+                    {"true", "false"}, &ignored_scores, &ignored_error);
+    }
     return self;
 }
 

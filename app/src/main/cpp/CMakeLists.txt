@@ -4,6 +4,13 @@ project(chuse LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# KleidiAI's Q8 kernels use the i8mm instructions on current ARMv8 phones; the plain NEON
+# path leaves roughly half the matmul speed on the table. x86 (emulator, host probes) is
+# unaffected.
+if(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+    set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
+endif()
+
 add_subdirectory(third_party/llama.cpp EXCLUDE_FROM_ALL)
 
 # The decision logic is separate from the JNI shim so it can be built and run on a
@@ -46,4 +53,7 @@ else()
 
     add_executable(derived_state_probe tools/derived_state_probe.cpp)
     target_link_libraries(derived_state_probe PRIVATE chuse_decision)
+
+    add_executable(latency_probe tools/latency_probe.cpp)
+    target_link_libraries(latency_probe PRIVATE chuse_decision)
 endif()
