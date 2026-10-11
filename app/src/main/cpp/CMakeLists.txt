@@ -22,7 +22,13 @@ if(ANDROID)
     add_library(chuse SHARED chuse_jni.cpp)
     target_link_libraries(chuse PRIVATE chuse_decision android log)
 else()
-    # Host build: a probe that runs the real model outside Android.
+    # Host builds: probes that run the real model outside Android.
     add_executable(decision_probe tools/decision_probe.cpp)
     target_link_libraries(decision_probe PRIVATE chuse_decision)
+
+    add_executable(noul_order_probe tools/noul_order_probe.cpp)
+    target_link_libraries(noul_order_probe PRIVATE chuse_decision)
+
+    add_executable(noul_wording_probe tools/noul_wording_probe.cpp)
+    target_link_libraries(noul_wording_probe PRIVATE chuse_decision)
 endif()

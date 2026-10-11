@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -237,7 +238,10 @@ private fun TopBar(status: ModelStatus, onClear: () -> Unit, hasExchange: Boolea
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 6.dp),
+            // The window draws edge to edge, so the bar has to claim the status bar inset
+            // itself. Without this the title sits underneath the clock and the phone icons.
+            .statusBarsPadding()
+            .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

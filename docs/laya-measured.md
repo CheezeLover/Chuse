@@ -7,9 +7,13 @@ same `chuse_decision.cpp` the app uses. Regenerate with:
 ./scripts/fetch-llama.sh
 cmake -B /tmp/probe -S app/src/main/cpp -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF \
       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
-cmake --build /tmp/probe --target decision_probe -j
+cmake --build /tmp/probe --target decision_probe noul_wording_probe noul_order_probe -j
 /tmp/probe/decision_probe app/src/main/assets/model.gguf
 ```
+
+The `noul_*` probes answer specific questions the main probe cannot:
+`noul_order_probe` settles whether the two yes/no columns are swapped, and
+`noul_wording_probe` measures how the option wording moves the answers.
 
 ## Why this file exists
 
@@ -27,6 +31,57 @@ model actually ran:
    type (`CHOICE=0, SCORE=1, NOUL=2`). Reading column 0 always scored yes/no questions against
    the *choice* head — the worst kind of bug, because the output looked like a real
    probability rather than an error.
+
+## The negative bias, and what caused it
+
+Yes/no answers leaned false. The obvious suspect — the two options being swapped — is wrong,
+and was worth ruling out rather than assuming.
+
+`tools/noul_order_probe.cpp` renders each case both ways. **Both orderings score exactly the
+same** across nine cases: 6/9 either way, which is no better than chance. So no column swap
+fixes it.
+
+The real cause is the **wording** of the options. The GGUF's `systemone` template supplies a
+fallback when a `noul` has no criteria:
+
+```
+[MASK] true: yes, the statement holds[SEP]
+[MASK] false: no, the statement does not hold[SEP]
+```
+
+Those two phrases are not symmetric. The false one is longer and more emphatic, and the model
+leans into it. `tools/noul_wording_probe.cpp` measures the alternatives on the same nine
+cases:
+
+| Option wording | Correct | Mean P(true) |
+|---|---:|---:|
+| GGUF fallback (long) | 6/9 | 0.483 |
+| Short symmetric | 8/9 | 0.562 |
+| `true` / `false` keywords | 8/9 | 0.576 |
+| **Bare keys (no description)** | **8/9** | **0.576** |
+
+Two concrete failures of the long phrasing, both of which the short form fixes:
+
+| Case | Long fallback | Bare keys |
+|---|---|---|
+| "Is this statement true?" / "Water boils at 100C at sea level." | 0.374 → **False** | 0.652 → **True** |
+| "Is the sky blue during the day?" / "The sky is blue." | 0.473 → **False** | 0.618 → **True** |
+
+Both are obviously true statements, and the long wording answered both wrongly. This
+compounds a weakness already visible above: the model is reliable on false and weak on true,
+and the fallback phrasing made the true side worse still.
+
+**The fix**: a `noul` with no criteria now sends the key as its own description, so the model
+reads `true: true` and `false: false` — symmetric, and what it was trained on. A user who
+supplies their own wording still has it passed through verbatim.
+
+### What remains weak
+
+One case fails under every wording: "Does ice melt at room temperature?" against the state
+"Ice does not melt at room temperature." The model answers True at 0.85, because the
+instruction and the state contradict each other and it appears to weight the instruction's
+polarity over the negated state. That looks like a genuine limitation of the checkpoint
+rather than a prompt defect, and it is left visible rather than papered over.
 
 ## Answers
 

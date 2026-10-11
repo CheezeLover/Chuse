@@ -96,13 +96,16 @@ class LayaEngine(
 
 /** The options a question presents to the model, in the order the model reads them. */
 internal fun Question.wireOptions(): List<ScoringRequest.Candidate> = when (this) {
-    // A noul's keys stay "false"/"true" even when the user supplies their own wording: the
-    // model has two fixed output columns and their meaning is positional. The criteria are
-    // the description — what the prompt says the two options mean — not the key. Swapping
-    // them would leave nothing to look up when reading the answer back.
+    // Keys stay "true"/"false" whatever the user calls the options: the model has two fixed
+    // output columns and their meaning is positional, so the criteria are the description,
+    // never the key.
+    //
+    // With no criteria the description falls back to the key itself, giving the symmetric
+    // "true: true" / "false: false" the model was trained on. The GGUF's own fallback
+    // phrasing biases answers negative when measured — see docs/laya-measured.md.
     is Question.Noul -> listOf(
-        ScoringRequest.Candidate("true", criteria?.yes ?: ""),
-        ScoringRequest.Candidate("false", criteria?.no ?: ""),
+        ScoringRequest.Candidate("true", criteria?.yes.orEmpty()),
+        ScoringRequest.Candidate("false", criteria?.no.orEmpty()),
     )
 
     is Question.Choice -> criteria.map { ScoringRequest.Candidate(it.label, it.gloss) }

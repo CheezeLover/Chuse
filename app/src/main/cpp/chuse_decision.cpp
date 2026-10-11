@@ -174,16 +174,17 @@ std::string DecisionModel::render_prompt(
             prompt += ": ";
             prompt += option_descriptions[i];
         } else if (type == QuestionType::Noul) {
-            // The template's own fallback wording, used when no criteria were supplied.
+            // Short and symmetric, on purpose. The GGUF's fallback wording is
+            // "yes, the statement holds" versus "no, the statement does not hold", and
+            // measuring the real model showed that phrasing biases answers negative: it is
+            // longer and more emphatic on the false side. Across nine cases it answered 6/9
+            // against 8/9 for "true"/"false", and it was confidently wrong on plainly true
+            // statements — the model is weak on true, and this wording made it worse.
+            //
+            // See tools/noul_wording_probe.cpp, and docs/laya-measured.md.
             prompt += option_keys[i];
             prompt += ": ";
-            if (!option_descriptions[i].empty()) {
-                prompt += option_descriptions[i];
-            } else if (option_keys[i] == "true") {
-                prompt += "yes, the statement holds";
-            } else {
-                prompt += "no, the statement does not hold";
-            }
+            prompt += option_descriptions[i].empty() ? option_keys[i] : option_descriptions[i];
         } else {
             // Choice renders the key alone unless it has a description. The earlier code let
             // this fall into the noul branch, which printed "no, the statement does not hold"
