@@ -46,13 +46,13 @@
     <string name="label_choice">Choice %1$d</string>
     <string name="action_add_choice">Add another choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>
-    <string name="action_add_level">Add another level</string>
-    <string name="label_scale_order">Scale, lowest to highest</string>
     <string name="action_clear">Clear</string>
     <string name="action_ask">Ask</string>
     <string name="thinking">Thinking…</string>
     <!-- States the measured cost of a missing situation rather than refusing the question. -->
     <string name="note_no_context">Without a situation this is close to a coin flip. Adding what it should judge makes a real difference.</string>
+    <!-- Explains why the situation field the user left empty now has text in it. -->
+    <string name="note_derived_context">No situation was given, so one was derived from the question. Edit it above if it is wrong.</string>
 
     <!-- What was asked -->
     <string name="bubble_choice">With choices</string>
@@ -61,7 +61,6 @@
     <!-- Answers -->
     <string name="result_true">True</string>
     <string name="result_false">False</string>
-    <string name="result_of">out of %1$s</string>
 
     <!-- The two readings -->
     <string name="confidence_label">Confidence</string>
