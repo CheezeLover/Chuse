@@ -1,0 +1,122 @@
+[
+  {
+    "name": "noul-true-statement",
+    "request": {
+      "state": "Water boils at 100C at sea level.",
+      "questions": {
+        "ok": { "type": "noul", "instructions": "Is this statement true?" }
+      }
+    },
+    "response": {
+      "ok": {
+        "type": "noul",
+        "noul": 0.4896,
+        "confidence": 0.5104,
+        "answer_confidence": 0.5104,
+        "action": { "act_probability": 1.0 }
+      }
+    }
+  },
+  {
+    "name": "noul-colour-pair",
+    "request": {
+      "state": "The sky is blue.",
+      "questions": {
+        "q1": { "type": "noul", "instructions": "Is the statement true?" },
+        "q2": {
+          "type": "choice",
+          "instructions": "Pick the colour.",
+          "criteria": {
+            "blue": "The colour of a clear daytime sky",
+            "green": "The colour of grass"
+          }
+        }
+      }
+    },
+    "response": {
+      "q1": { "type": "noul", "noul": 0.749, "confidence": 0.749, "answer_confidence": 0.749 },
+      "q2": {
+        "type": "choice",
+        "choice": "blue",
+        "probabilities": { "blue": 0.977, "green": 0.023 },
+        "confidence": 0.842,
+        "answer_confidence": 0.977
+      }
+    }
+  },
+  {
+    "name": "choice-three-options",
+    "request": {
+      "state": "I need a new laptop.",
+      "questions": {
+        "pick": {
+          "type": "choice",
+          "instructions": "Which do they need most?",
+          "criteria": {
+            "laptop": "A portable computer",
+            "phone": "A handheld mobile device",
+            "tablet": "A large touch screen device"
+          }
+        }
+      }
+    },
+    "response": {
+      "pick": {
+        "type": "choice",
+        "choice": "laptop",
+        "probabilities": { "laptop": 0.9756, "phone": 0.0116, "tablet": 0.0128 },
+        "confidence": 0.8801,
+        "answer_confidence": 0.9756
+      }
+    }
+  },
+  {
+    "name": "score-five-levels",
+    "request": {
+      "state": "The deploy broke production.",
+      "questions": {
+        "s": {
+          "type": "score",
+          "instructions": "Rate the severity.",
+          "criteria": ["negligible", "minor", "moderate", "major", "catastrophic"]
+        }
+      }
+    },
+    "response": {
+      "s": {
+        "type": "score",
+        "score": 3.2538,
+        "legend": {
+          "0": "negligible", "1": "minor", "2": "moderate", "3": "major", "4": "catastrophic"
+        },
+        "probabilities": { "0": 0.0038, "1": 0.0309, "2": 0.0719, "3": 0.4946, "4": 0.3988 },
+        "confidence": 0.3584,
+        "answer_confidence": 0.4946
+      }
+    }
+  },
+  {
+    "name": "chinese-input",
+    "request": {
+      "state": "今天天气很好，适合出门散步。",
+      "questions": {
+        "a": { "type": "noul", "instructions": "这句话的陈述是否为真?" },
+        "b": {
+          "type": "choice",
+          "instructions": "选出最合适的心情。",
+          "criteria": { "happy": "心情愉快", "sad": "心情低落" }
+        }
+      }
+    },
+    "response": {
+      "a": { "type": "noul", "noul": 0.3932, "confidence": 0.6068, "answer_confidence": 0.6068 },
+      "b": {
+        "type": "choice",
+        "choice": "happy",
+        "probabilities": { "happy": 0.995, "sad": 0.005 },
+        "confidence": 0.9549,
+        "answer_confidence": 0.995
+      }
+    }
+  }
+]

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The Compose theme is the real one (see ChuseTheme.kt). This exists only so the splash
+      screen and the window background match the app's colours instead of flashing the
+      platform default before Compose takes over.
+    -->
+    <style name="Theme.Chuse" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>
