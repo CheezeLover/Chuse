@@ -21,6 +21,7 @@
     <!-- Input -->
     <string name="hint_question">Ask something…</string>
     <string name="hint_optional_context">Optional context — what should it judge?</string>
+    <string name="action_add_context">Add context</string>
     <string name="label_choice">Choice %1$d</string>
     <string name="action_add_choice">Add another choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>

@@ -23,20 +23,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -56,6 +61,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +100,7 @@ fun ChatScreen(viewModel: LayaViewModel) {
     var mode by remember { mutableStateOf(Mode.YesNo) }
     var question by remember { mutableStateOf("") }
     var context by remember { mutableStateOf("") }
+    var contextVisible by rememberSaveable { mutableStateOf(false) }
     var choices by remember { mutableStateOf(listOf("", "")) }
     var levels by remember { mutableStateOf(DefaultLevels) }
 
@@ -105,8 +112,12 @@ fun ChatScreen(viewModel: LayaViewModel) {
     val working = askState is AskState.Working
     val listState = rememberLazyListState()
 
+    // Follow the exchange as it changes. animateScrollToItem rather than scrollToItem so a new
+    // answer eases in rather than jumping, and so this survives the keyboard opening under it.
     LaunchedEffect(answer, working) {
-        if (answer != null || working) listState.animateScrollToItem(0)
+        if (answer != null || working) {
+            listState.animateScrollToItem(0)
+        }
     }
 
     fun ask() {
@@ -138,7 +149,11 @@ fun ChatScreen(viewModel: LayaViewModel) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // Only the keyboard inset, and only once. The composer also applies it below, and
+            // applying both would pad twice — which is what pushes the send button off the
+            // top of the keyboard on a device with a tall one.
+            .windowInsetsPadding(WindowInsets.ime),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             TopBar(status = modelStatus, onClear = ::clear, hasExchange = asked != null)
@@ -146,7 +161,7 @@ fun ChatScreen(viewModel: LayaViewModel) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 item("thread") {
@@ -167,24 +182,30 @@ fun ChatScreen(viewModel: LayaViewModel) {
                 }
             }
 
-            Composer(
-                mode = mode,
-                onModeChange = {
-                    mode = it
-                    viewModel.reset()
-                },
-                question = question,
-                onQuestionChange = { question = it },
-                context = context,
-                onContextChange = { context = it },
-                choices = choices,
-                onChoicesChange = { choices = it },
-                levels = levels,
-                onLevelsChange = { levels = it },
-                working = working,
-                canAsk = question.isNotBlank() && valid(mode, choices, levels),
-                onAsk = ::ask,
-            )
+            // The composer is a sibling of the thread rather than an overlay, so the thread
+            // always ends above it and the answer can never end up underneath.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Composer(
+                    mode = mode,
+                    onModeChange = {
+                        mode = it
+                        viewModel.reset()
+                    },
+                    question = question,
+                    onQuestionChange = { question = it },
+                    context = context,
+                    onContextChange = { context = it },
+                    contextVisible = contextVisible,
+                    onContextToggle = { contextVisible = !contextVisible },
+                    choices = choices,
+                    onChoicesChange = { choices = it },
+                    levels = levels,
+                    onLevelsChange = { levels = it },
+                    working = working,
+                    canAsk = question.isNotBlank() && valid(mode, choices, levels),
+                    onAsk = ::ask,
+                )
+            }
         }
     }
 }
@@ -760,6 +781,8 @@ private fun Composer(
     onQuestionChange: (String) -> Unit,
     context: String,
     onContextChange: (String) -> Unit,
+    contextVisible: Boolean,
+    onContextToggle: () -> Unit,
     choices: List<String>,
     onChoicesChange: (List<String>) -> Unit,
     levels: List<String>,
@@ -775,8 +798,9 @@ private fun Composer(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
+            // The keyboard inset is handled once, on the screen's root Box. Applying it here
+            // as well would double the gap and lift the send button clear of the keyboard.
             .navigationBarsPadding()
-            .imePadding()
             .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         ModeSelector(mode, onModeChange, Modifier.padding(horizontal = 4.dp, vertical = 6.dp))
@@ -797,8 +821,11 @@ private fun Composer(
             LevelFields(levels, onLevelsChange)
         }
 
+        // Always available, but tucked away in yes/no where one field is the whole promise. It was
+        // previously shown only when non-empty or in another mode, which left no way to open
+        // it at all — the one control that most improves an answer you cannot see.
         AnimatedVisibility(
-            visible = context.isNotEmpty() || mode != Mode.YesNo,
+            visible = contextVisible || context.isNotEmpty(),
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically(),
         ) {
@@ -807,7 +834,18 @@ private fun Composer(
                 onValueChange = onContextChange,
                 placeholder = stringResource(R.string.hint_optional_context),
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                // Context is prose, not a label, so it wraps rather than scrolling sideways.
+                singleLine = false,
+                imeAction = ImeAction.Default,
             )
+        }
+
+        AnimatedVisibility(
+            visible = !contextVisible && context.isEmpty(),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            AddRowButton(R.string.action_add_context) { onContextToggle() }
         }
 
         Surface(
@@ -816,10 +854,21 @@ private fun Composer(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Row(
-                modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                modifier = Modifier
+                    .padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+                    // heightIn caps the field so a long question grows the composer to a
+                    // limit rather than unbounded. Without it the input can push the mode
+                    // selector and the thread off the top of a small screen.
+                    .heightIn(max = 148.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                Box(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        // Scrolls internally once the field hits the cap, so a multi-line
+                        // question stays usable instead of shoving the layout around.
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     if (question.isEmpty()) {
                         Text(
                             text = stringResource(R.string.hint_question),
@@ -845,6 +894,9 @@ private fun Composer(
                                 }
                             },
                         ),
+                        // Reclaimed after the keyboard hides, so the next question can be typed
+                        // straight away. Without this, focus is dropped and the first tap only
+                        // reopens the keyboard.
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester)
@@ -969,6 +1021,9 @@ private fun CompactField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    singleLine: Boolean = true,
+    imeAction: ImeAction = ImeAction.Next,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
@@ -982,12 +1037,17 @@ private fun CompactField(
                 TextStyle(color = MaterialTheme.colorScheme.onSurface),
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            maxLines = 3,
+            // Single line by default. With maxLines > 1 the enter key inserts a newline, which
+            // is wrong for a one-word choice and traps the user in the field.
+            maxLines = if (singleLine) 1 else 3,
+            singleLine = singleLine,
+            keyboardOptions = KeyboardOptions(imeAction = imeAction),
+            keyboardActions = keyboardActions,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             decorationBox = { inner ->
-                if (value.isEmpty()) {
+                if (value.isEmpty() && placeholder.isNotEmpty()) {
                     Text(
                         text = placeholder,
                         style = MaterialTheme.typography.bodyMedium,
@@ -1003,28 +1063,26 @@ private fun CompactField(
 @Composable
 private fun ChoiceFields(choices: List<String>, onChange: (List<String>) -> Unit) {
     Column(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            // Capped and scrollable: an unbounded list of choice fields would grow the composer
+            // until the thread and the mode selector were pushed off the screen entirely.
+            .heightIn(max = 168.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         choices.forEachIndexed { index, value ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.weight(1f)) {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.label_choice, index + 1),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                        )
-                    }
-                    CompactField(
-                        value = value,
-                        onValueChange = { updated ->
-                            onChange(choices.toMutableList().also { it[index] = updated })
-                        },
-                        placeholder = "",
-                    )
-                }
+                // The placeholder is passed into CompactField rather than drawn as a sibling
+                // Text. Drawn separately it sits behind the field and the two overlap.
+                CompactField(
+                    value = value,
+                    onValueChange = { updated ->
+                        onChange(choices.toMutableList().also { it[index] = updated })
+                    },
+                    placeholder = stringResource(R.string.label_choice, index + 1),
+                    modifier = Modifier.weight(1f),
+                )
                 if (choices.size > 2) {
                     IconButton(
                         onClick = { onChange(choices.filterIndexed { i, _ -> i != index }) },
@@ -1047,7 +1105,10 @@ private fun ChoiceFields(choices: List<String>, onChange: (List<String>) -> Unit
 @Composable
 private fun LevelFields(levels: List<String>, onChange: (List<String>) -> Unit) {
     Column(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .heightIn(max = 148.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
