@@ -58,6 +58,24 @@ The live parity check is opt-in, since the service is on a LAN:
 ./gradlew :core:test -Dchuse.shim=http://192.168.3.129:8081
 ```
 
+### Signing for local testing
+
+Release builds are unsigned, so a phone will refuse to install them. Sign with a throwaway
+key before sideloading:
+
+```bash
+./gradlew :app:assembleRelease
+./scripts/sign-test-apk.sh app/build/outputs/apk/release/app-release-unsigned.apk
+```
+
+The script generates a self-signed key on first use and prints the verification output. It
+aligns before signing, because `apksigner` signs the final layout and the APK holds a 429 MB
+model plus native libraries.
+
+**That key is not for distribution.** It is self-signed and the password lives in the script,
+so anyone can produce an update the phone will accept. Set `CHUSE_KEYSTORE` and
+`CHUSE_KEY_PASS` to sign with your own.
+
 ## Layout
 
 ```

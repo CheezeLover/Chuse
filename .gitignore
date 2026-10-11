@@ -16,3 +16,9 @@ app/src/main/cpp/third_party/llama.cpp/
 
 # The Laya GGUF is added per-machine by whoever holds it; see app/src/main/assets/README.md.
 app/src/main/assets/*.gguf
+
+# Signing material. A keystore in git history is a compromised keystore: anyone who clones
+# can sign an update the phone will accept. Keys are generated locally, per machine.
+*.jks
+*.keystore
+*.p12
