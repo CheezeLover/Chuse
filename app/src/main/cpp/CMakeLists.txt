@@ -32,9 +32,6 @@ else()
     add_executable(noul_wording_probe tools/noul_wording_probe.cpp)
     target_link_libraries(noul_wording_probe PRIVATE chuse_decision)
 
-    add_executable(column_probe tools/column_probe.cpp)
-    target_link_libraries(column_probe PRIVATE chuse_decision)
-
     add_executable(offset_probe tools/offset_probe.cpp)
     target_link_libraries(offset_probe PRIVATE chuse_decision)
 
