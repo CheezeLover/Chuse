@@ -165,7 +165,6 @@ class LayaEngineTest {
     fun `score is an expectation, so it may land between two levels`() {
         val engine = engineWith("low" to 0f, "high" to 0f)
         val result = engine.decide(
-            "Ambiguous.",
             Question.Score("s", "Rate it.", listOf("low", "high")),
         ) as DecisionResult.Score
         assertEquals(0.5, result.score, 1e-6)
@@ -177,7 +176,6 @@ class LayaEngineTest {
     fun `noul reports the probability that the statement holds`() {
         val engine = engineWith("true" to 3f, "false" to 0f)
         val result = engine.decide(
-            "The sky is blue.",
             Question.Noul("ok", "Is this true?"),
         ) as DecisionResult.Noul
 
@@ -202,7 +200,6 @@ class LayaEngineTest {
             },
         )
         val result = engine.decide(
-            "The invoice total does not match the purchase order.",
             Question.Noul("q", "Is the invoice correct?", BooleanCriteria("holds", "fails")),
         ) as DecisionResult.Noul
 
@@ -215,7 +212,6 @@ class LayaEngineTest {
     fun `choice ranks every option and keeps the full distribution`() {
         val engine = engineWith("laptop" to 4f, "phone" to 1f, "tablet" to 0f)
         val result = engine.decide(
-            "I need a new computer.",
             Question.Choice(
                 "pick",
                 "What do they need?",
@@ -237,7 +233,6 @@ class LayaEngineTest {
     fun `choice breaks a tie in favour of the option listed first`() {
         val engine = engineWith("alpha" to 1f, "beta" to 1f)
         val result = engine.decide(
-            "Tied.",
             Question.Choice(
                 "pick",
                 "Pick one.",
@@ -260,7 +255,6 @@ class LayaEngineTest {
             "catastrophic" to 0f,
         )
         val result = engine.decide(
-            "The deploy broke production.",
             Question.Score(
                 "sev",
                 "Rate the severity.",
@@ -288,7 +282,6 @@ class LayaEngineTest {
             },
         )
         engine.decide(
-            "state",
             Question.Score("s", "Rate.", listOf("low", "medium", "high")),
         )
         assertEquals(listOf("0", "1", "2"), seen!!.options.map { it.key })
@@ -304,7 +297,7 @@ class LayaEngineTest {
                 FloatArray(request.options.size) { 0f }
             },
         )
-        engine.decide("state", Question.Noul("q", "True?"))
+        engine.decide(Question.Noul("q", "True?"))
         assertEquals(listOf("true", "false"), seen!!.options.map { it.key })
     }
 
@@ -318,7 +311,6 @@ class LayaEngineTest {
             },
         )
         engine.decide(
-            "state",
             Question.Choice(
                 "c",
                 "Pick.",
@@ -363,7 +355,24 @@ class LayaEngineTest {
     }
 
     @Test
-    fun `blank state is rejected before the model is touched`() {
+    fun `an empty state is answered rather than rejected`() {
+        var called = false
+        val engine = LayaEngine(
+            CandidateScorer { _, _ ->
+                called = true
+                floatArrayOf(0f, 0f)
+            },
+        )
+        // An empty state is legal and is what a single-field UI sends, so this must answer
+        // rather than throw. The model was measured with no state and still returns a usable
+        // distribution — see docs/laya-measured.md.
+        val result = engine.decide(Question.Noul("n", "Is it true?"))
+        assertTrue("the scorer should have run", called)
+        assertTrue(result is DecisionResult.Noul)
+    }
+
+    @Test
+    fun `a blank question is refused before the model is consulted`() {
         var called = false
         val engine = LayaEngine(
             CandidateScorer { _, _ ->
@@ -372,9 +381,39 @@ class LayaEngineTest {
             },
         )
         assertThrows(IllegalArgumentException::class.java) {
-            engine.decide("   ", Question.Noul("n", "Is it true?"))
+            engine.decide(Question.Noul("n", "   "))
         }
-        assertTrue("scorer should not have been called", !called)
+        assertTrue("the scorer should not have run", !called)
+    }
+
+    @Test
+    fun `state is passed to the scorer verbatim, including when empty`() {
+        var seen: String? = null
+        val engine = LayaEngine(
+            CandidateScorer { request, _ ->
+                seen = request.state
+                floatArrayOf(1f, 0f)
+            },
+        )
+        engine.decide(Question.Noul("n", "Is it true?"), "The invoice total is wrong.")
+        assertEquals("The invoice total is wrong.", seen)
+
+        seen = null
+        engine.decide(Question.Noul("n", "Is it true?"))
+        assertEquals("", seen)
+    }
+
+    @Test
+    fun `surrounding whitespace in a state is trimmed before it reaches the model`() {
+        var seen: String? = null
+        val engine = LayaEngine(
+            CandidateScorer { request, _ ->
+                seen = request.state
+                floatArrayOf(1f, 0f)
+            },
+        )
+        engine.decide(Question.Noul("n", "Is it true?"), "  padded  ")
+        assertEquals("padded", seen)
     }
 
     @Test
@@ -382,7 +421,6 @@ class LayaEngineTest {
         val engine = LayaEngine(CandidateScorer { _, _ -> floatArrayOf(1f) })
         assertThrows(IllegalArgumentException::class.java) {
             engine.decide(
-                "state",
                 Question.Choice(
                     "c",
                     "Pick.",
@@ -399,7 +437,6 @@ class LayaEngineTest {
     fun `a fixed scorer normalises unseen options rather than dropping them`() {
         val engine = LayaEngine(CandidateScorer.fixed(mapOf("a" to 1f)))
         val result = engine.decide(
-            "state",
             Question.Choice(
                 "c",
                 "Pick.",
@@ -417,9 +454,8 @@ class LayaEngineTest {
     fun `probabilities stay inside the unit interval for every question type`() {
         val engine = engineWith("a" to 3f, "b" to 1f, "c" to -2f)
         val results = listOf(
-            engine.decide("state", Question.Noul("q", "True?")),
+            engine.decide(Question.Noul("q", "True?")),
             engine.decide(
-                "state",
                 Question.Choice(
                     "c",
                     "Pick.",
@@ -430,7 +466,7 @@ class LayaEngineTest {
                     ),
                 ),
             ),
-            engine.decide("state", Question.Score("s", "Rate.", listOf("low", "mid", "high"))),
+            engine.decide(Question.Score("s", "Rate.", listOf("low", "mid", "high"))),
         )
         for (result in results) {
             assertTrue("$result", result.confidence in 0.0..1.0)

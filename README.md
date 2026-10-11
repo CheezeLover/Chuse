@@ -1,20 +1,27 @@
 # Chuse
 
 An Android app that asks Laya — a small decision model — one question at a time, and shows
-the answer with how sure the model is. Three modes, no conversation, no history.
+the answer with how sure the model is. One page, one input, no history.
 
 The model runs entirely on the device. The app declares no permissions and opens no
 sockets; there is nothing to send and nothing to store.
 
+One field asks everything. A chip row picks the mode; picking **Choices** or **Score** grows
+the input zone to add the options or the scale, and nothing else changes.
+
 | Mode | Asks | Returns |
 |---|---|---|
-| **Yes or no** | a statement and a question | P(true), and which way it leans |
-| **Rank choices** | a question and two or more options | every option ranked, with probabilities |
-| **Score it** | a question and a scale you define | an expected level, with the distribution behind it |
+| **Yes / no** | a question | P(true), and how sure it is |
+| **Choices** | a question and two or more options | every option ranked, with probabilities |
+| **Score** | a question and an optional scale | an expected level and the level it maps to |
+
+A second **Context** field is available in every mode and is genuinely optional. Measured
+against the real model, adding it sharpens the answer substantially and omitting it still
+works — see [`docs/laya-measured.md`](docs/laya-measured.md).
 
 ## Status
 
-Everything is built and all 37 tests pass. The GGUF is **not committed** — 429 MB, and
+Everything is built and all 39 tests pass. The GGUF is **not committed** — 429 MB, and
 gitignored — so drop it in before building:
 
 ```bash
@@ -27,10 +34,10 @@ Without it the app still installs and runs, answering through a stand-in that pr
 stable, meaningless numbers. The home screen says so, permanently, so a demo can never be
 mistaken for the model working.
 
-The one thing this repository cannot tell you is whether the model's scores are *right* — see
-[Parity](#parity-what-is-and-isnt-verified). The decision path compiles and its contract is
-checked against upstream's own implementation, but it has never been executed. That needs a
-device.
+The decision path has been run against the real weights — see
+[docs/laya-measured.md](docs/laya-measured.md) for what the model actually returns. What is
+still unproven is behaviour on a physical phone: the arm64 build compiles and its symbols are
+correct, but no one has run it on hardware yet.
 
 ## Building
 
@@ -150,12 +157,15 @@ recorded responses.
 
 **Not verified, and why:**
 
-- **The model's own scores.** The decision path compiles and its contract is checked against
-  upstream's `server-decision.cpp`, but it has never been *executed* — that needs a device or
-  an emulator. Whether the rendered prompt and marker layout produce sensible probabilities is
-  the one thing this repo cannot tell you.
-- **On-device speed.** A one-shot decision is a single forward pass over at most a couple of
-  hundred tokens, so it should feel instant, but that has not been measured on real hardware.
+- **The decision path itself.** It has now been run against the real weights via
+  `tools/decision_probe.cpp`, which exercises the same `chuse_decision.cpp` the app uses.
+  Measured outputs are in [`docs/laya-measured.md`](docs/laya-measured.md). That found four
+  bugs no unit test could have, including reading the wrong embeddings column for two of the
+  three question types — which produced plausible-looking nonsense rather than an error.
+- **On a real phone.** Everything above was measured on x86-64. The arm64 build compiles and
+  its symbols are correct, but the numbers on a phone are unverified.
+- **On-device speed.** A single forward pass over at most ~200 tokens, but not yet timed on
+  phone hardware.
 
 ## Chinese phones
 

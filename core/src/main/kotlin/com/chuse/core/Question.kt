@@ -64,5 +64,11 @@ sealed interface Question {
     }
 }
 
-/** The optional true/false glosses a `noul` question may carry. */
-data class BooleanCriteria(val yes: String, val no: String)
+/**
+ * The optional true/false glosses a `noul` question may carry.
+ *
+ * The keys stay "true"/"false" whatever this holds — the model has two fixed output columns
+ * and their meaning is positional, so this is wording shown to the prompt, never a rename of
+ * the columns.
+ */
+data class BooleanCriteria(val yes: String = "", val no: String = "")

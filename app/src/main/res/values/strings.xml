@@ -1,75 +1,47 @@
 <resources>
     <string name="app_name">Chuse</string>
 
-    <!-- Home -->
-    <string name="home_tagline">One question. One answer.</string>
-    <string name="home_yesno_title">Yes or no</string>
-    <string name="home_yesno_body">Ask a question and get a straight answer, with how sure it is.</string>
-    <string name="home_choice_title">Rank choices</string>
-    <string name="home_choice_body">Give it options and it ranks them against your question.</string>
-    <string name="home_score_title">Score it</string>
-    <string name="home_score_body">Ask for a score on a scale and get a number back.</string>
+    <!-- Modes -->
+    <string name="mode_yesno">Yes / no</string>
+    <string name="mode_choice">Choices</string>
+    <string name="mode_score">Score</string>
 
-    <!-- Shared -->
-    <string name="action_ask">Ask</string>
-    <string name="action_ask_again">Ask again</string>
-    <string name="action_back">Back</string>
-    <string name="action_retry">Retry</string>
-    <string name="label_situation">Situation or statement</string>
-    <string name="hint_situation">What should Laya judge?</string>
-    <string name="label_question">Question</string>
-    <string name="hint_question">Ask Laya something…</string>
-    <string name="label_instructions">Instructions</string>
-    <string name="hint_instructions">e.g. Is this true?</string>
+    <!-- Prompts before anything has been asked -->
+    <string name="prompt_start">Ask Laya something</string>
+    <string name="hint_yesno">"Is the sky blue during the day?"</string>
+    <string name="hint_choice">Ask a question, then list the options below.</string>
+    <string name="hint_score">Ask for a score, then set the scale below.</string>
 
-    <!-- Choices -->
-    <string name="label_choices">Choices</string>
+    <!-- Input -->
+    <string name="hint_question">Ask a question…</string>
+    <string name="label_optional_context">Context (optional)</string>
+    <string name="hint_optional_context">What should it judge? Sharper answers.</string>
     <string name="label_choice">Choice %1$d</string>
-    <string name="label_description">Short description</string>
     <string name="action_add_choice">Add choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>
-
-    <!-- Scale -->
-    <string name="label_scale">Scale, lowest to highest</string>
-    <string name="hint_scale_level">Level %1$d</string>
     <string name="action_add_level">Add level</string>
-    <string name="action_remove_level">Remove level %1$d</string>
+    <string name="label_scale_order">Scale, lowest to highest</string>
+    <string name="action_clear">Clear</string>
 
-    <!-- Yes / No result -->
+    <!-- Answers -->
     <string name="result_true">True</string>
     <string name="result_false">False</string>
+    <string name="result_of">out of %1$s</string>
 
-    <!-- Ranking result -->
-    <string name="result_ranked">Ranked</string>
-
-    <!-- Score result -->
-    <string name="result_score">Score</string>
-    <string name="result_of">%1$s of %2$s</string>
-
-    <!-- The two derived figures, which are genuinely different numbers -->
+    <!-- The two readings -->
     <string name="confidence_label">Confidence</string>
-    <string name="confidence_hint">How sure the answer is</string>
+    <string name="confidence_hint">Chance the answer is right</string>
     <string name="certainty_label">Certainty</string>
     <string name="certainty_hint">How far from a coin flip</string>
 
-    <!-- Model lifecycle -->
-    <string name="model_loading">Loading Laya…</string>
-    <string name="model_ready">Laya is ready</string>
-    <string name="model_missing">No model bundled</string>
+    <!-- Model status -->
+    <string name="model_loading">Loading</string>
+    <string name="model_ready">Ready</string>
+    <string name="model_standin">Stand-in</string>
+    <string name="model_failed_dot">Model failed</string>
     <string name="model_missing_body">This build has no GGUF, so answers come from a stand-in. Drop model.gguf into app/src/main/assets and rebuild.</string>
     <string name="model_failed">Could not load the model: %1$s</string>
-    <string name="model_standin_banner">Stand-in answers — no model bundled</string>
 
     <!-- Errors -->
-    <string name="error_blank_situation">Describe the situation first.</string>
-    <string name="error_blank_question">Enter a question.</string>
-    <string name="error_blank_instruction">Enter instructions.</string>
-    <string name="error_needs_two_choices">Add at least two choices.</string>
-    <string name="error_duplicate_choice">Two choices cannot share a name.</string>
-    <string name="error_needs_two_levels">A scale needs at least two levels.</string>
-    <string name="error_blank_level">Every level needs a label.</string>
     <string name="error_ask_failed">That question could not be answered: %1$s</string>
-
-    <!-- Content descriptions -->
-    <string name="cd_confidence_gauge">Confidence gauge</string>
 </resources>

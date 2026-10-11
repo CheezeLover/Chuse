@@ -1,24 +1,28 @@
 package com.chuse.core
 
 /**
- * Turns a state and a typed question into an answer, by asking a [CandidateScorer] for the
- * relative likelihood of each option and doing the arithmetic here.
+ * Turns a question into an answer, by asking a [CandidateScorer] for the relative likelihood
+ * of each option and doing the arithmetic here.
  *
  * All three question types share one path: build options, score, softmax. What differs is
  * only how the resulting distribution is reported — a probability for `noul`, a ranking for
  * `choice`, an expectation for `score`. Keeping the shared path shared is what stops the
  * three modes from drifting apart as they are tuned.
  *
- * The engine is deliberately free of Android types so it can be exercised on the JVM
- * against the live shim (see `ParityTest`).
+ * [state] is optional. Every mode can be driven by the question alone, which is what the
+ * single-field interface relies on; supplying a situation sharpens the answer when there is
+ * one to give. See `docs/laya-measured.md` for the measurements behind that.
+ *
+ * The engine is deliberately free of Android types so it can be exercised on the JVM against
+ * the live shim (see `ParityTest`).
  */
 class LayaEngine(
     private val scorer: CandidateScorer,
     private val temperatures: TemperatureTable = TemperatureTable.Default,
 ) {
 
-    fun decide(state: String, question: Question): DecisionResult {
-        require(state.isNotBlank()) { "state must not be blank" }
+    fun decide(question: Question, state: String = ""): DecisionResult {
+        val state = state.trim()
 
         // One definition of the option order, shared with the result builders below. Having
         // it written twice is how the two copies drift and a probability ends up attached to

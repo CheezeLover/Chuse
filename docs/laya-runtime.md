@@ -26,8 +26,10 @@ Not autoregressive. One encoder pass, no tokens generated:
    then `{state}[SEP]`.
 2. Truncate question and options to `max_head_tokens` (192), shrinking options evenly
    when they would overflow. The model was trained this way, so the layout is not free.
-3. Run the encoder with embeddings enabled (`llama_set_embeddings`).
-4. Read `embeddings[column]` at each option's marker position — one float per option.
+3. Run the encoder with `llama_encode` — **not** `llama_decode`, which refuses the batch and
+   aborts on an encoder context.
+4. Read `embeddings[column]` at each option's marker position — one float per option, where
+   `column` is the question type's index (`CHOICE=0, SCORE=1, NOUL=2`).
    For Laya there is no pointer token, so the score is a single float, not a dot product.
 5. Softmax the scores **divided by a temperature** that depends on the question type and
    the number of options. Without this the probabilities are not comparable.
@@ -72,14 +74,18 @@ when the uniform denominator matches.
 
 ## What is still unverified
 
-The native decision path has never been executed on a device — that needs real hardware or
-an emulator. What *is* verified:
+The decision path has been **executed against the real weights** — see
+[`laya-measured.md`](laya-measured.md). It has never run on a physical phone, so what remains
+unverified is arm64-specific behaviour and on-device timing.
+
+Verified so far:
 
 - llama.cpp v0.6.0 cross-compiles for arm64-v8a and x86_64, and the three JNI entry points
   are exported under exactly the names Kotlin's `external` declarations resolve to
   (`Java_com_chuse_inference_LlamaBridge_native{Load,Free,Score}`).
-- The GGUF's metadata and template parse correctly under llama.cpp's own reader on the host.
+- The GGUF's metadata and template parse correctly under llama.cpp's own reader.
 - Both test suites pass, including live parity against `laya-shim`.
+- The rendered prompts and the resulting scores, measured on x86-64 against the real model.
 
 Not yet verified: that the rendered prompt produces sensible scores, and that the marker
 layout matches what the model was trained on. Both are only observable by running it.
@@ -88,10 +94,16 @@ layout matches what the model was trained on. Both are only observable by runnin
 
 | Concern | File |
 |---|---|
-| Prompt rendering, truncation, marker read | `app/src/main/cpp/chuse_jni.cpp` |
+| Prompt rendering, truncation, marker read, encode | `app/src/main/cpp/chuse_decision.cpp` |
+| JNI shim over the above | `app/src/main/cpp/chuse_jni.cpp` |
+| Host harness that runs the real model | `app/src/main/cpp/tools/decision_probe.cpp` |
 | Option ordering, temperature, softmax, confidence | `core/src/main/kotlin/com/chuse/core/` |
 | Model loading and lifecycle | `app/src/main/java/com/chuse/data/LayaRepository.kt` |
 | JNI surface | `app/src/main/java/com/chuse/inference/LlamaBridge.kt` |
 
 The engine refuses at load time anything that is not a `modern-bert` model with decision type
 `laya`, rather than loading it and returning meaningless numbers later.
+
+The decision logic lives outside the JNI layer so the same code can be built and run on a
+workstation. That is what makes `tools/decision_probe.cpp` possible, and it is how four bugs
+were found that no Kotlin test could have reached.

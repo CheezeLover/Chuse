@@ -72,10 +72,10 @@ class LayaRepository(private val loadScorer: (String) -> CloseableScorer) : Clos
      * guessing here which failures are worth showing would only hide some of them.
      */
     suspend fun decide(
-        situation: String,
         question: Question,
+        state: String = "",
     ): DecisionResult = withContext(Dispatchers.Default) {
-        LayaEngine(scorer).decide(situation, question)
+        LayaEngine(scorer).decide(question, state)
     }
 
     override fun close() {

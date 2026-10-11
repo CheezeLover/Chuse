@@ -21,10 +21,10 @@ sealed interface AskState {
 }
 
 /**
- * Holds the model and the result of the one question on screen.
+ * Holds the model and the result of the question on screen.
  *
- * There is no history here by design: [reset] is the only way back to the form, so the app
- * cannot accumulate a conversation it was never meant to have.
+ * There is no history by design: [reset] is the only way back, so the app cannot accumulate a
+ * conversation it was never meant to have.
  */
 class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
 
@@ -33,39 +33,38 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
     private val _askState = MutableStateFlow<AskState>(AskState.Idle)
     val askState: StateFlow<AskState> = _askState.asStateFlow()
 
-    fun askYesNo(situation: String, question: String) = ask(
-        situation,
-        Question.Noul(
-            id = "answer",
-            instructions = question,
-            criteria = BooleanCriteria(yes = "true", no = "false"),
-        ),
+    /** Asks a yes/no question. [state] may be empty — the model answers either way. */
+    fun askYesNo(question: String, state: String = "") = ask(
+        Question.Noul(id = "answer", instructions = question, criteria = BooleanCriteria()),
+        state,
     )
 
-    fun askChoice(situation: String, question: String, options: List<Pair<String, String>>) = ask(
-        situation,
+    fun askChoice(
+        question: String,
+        options: List<Pair<String, String>>,
+        state: String = "",
+    ) = ask(
         Question.Choice(
             id = "answer",
             instructions = question,
             criteria = options.map { Question.Choice.Option(it.first, it.second) },
         ),
+        state,
     )
 
-    fun askScore(situation: String, question: String, levels: List<String>) = ask(
-        situation,
-        Question.Score(id = "answer", instructions = question, criteria = levels),
-    )
+    fun askScore(question: String, levels: List<String>, state: String = "") =
+        ask(Question.Score(id = "answer", instructions = question, criteria = levels), state)
 
     fun reset() {
         _askState.value = AskState.Idle
     }
 
-    private fun ask(situation: String, question: Question) {
+    private fun ask(question: Question, state: String) {
         if (_askState.value is AskState.Working) return
         _askState.value = AskState.Working
         viewModelScope.launch {
             _askState.value = try {
-                AskState.Answered(repository.decide(situation, question))
+                AskState.Answered(repository.decide(question, state))
             } catch (cancellation: kotlinx.coroutines.CancellationException) {
                 throw cancellation
             } catch (failure: Exception) {

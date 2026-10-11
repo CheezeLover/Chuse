@@ -18,8 +18,8 @@ import org.junit.Test
  * user can actually cause.
  *
  * The scorer's contract is the seam, so these tests inject one. The real llama.cpp scorer is
- * covered by the fact that it compiles, that its symbols match the Kotlin declarations, and
- * by parity against the model's own metadata — not here, which needs a device.
+ * covered by `tools/decision_probe.cpp`, which runs the same scoring code against the real
+ * model — see docs/laya-measured.md.
  */
 class LayaRepositoryTest {
 
@@ -31,6 +31,8 @@ class LayaRepositoryTest {
             private set
         var lastOptions: List<String> = emptyList()
             private set
+        var lastState: String? = null
+            private set
         var lastType: QuestionType? = null
             private set
         var lastTemperature = 0f
@@ -38,6 +40,7 @@ class LayaRepositoryTest {
 
         override fun score(request: ScoringRequest, temperature: Float): FloatArray {
             lastOptions = request.options.map { it.key }
+            lastState = request.state
             lastType = request.type
             lastTemperature = temperature
             return request.options.map { table[it.key] ?: unseen }.toFloatArray()
@@ -103,20 +106,38 @@ class LayaRepositoryTest {
     }
 
     @Test
-    fun `a yes-no question reaches the scorer with true before false`() = runBlocking {
+    fun `a yes-no question needs no state`() = runBlocking {
         val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
         val repository = LayaRepository { scorer }
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
+        // The single-field UI sends no situation at all. The model was measured with an empty
+        // state and still answers, which is what makes that possible.
         val result = repository.decide(
-            "The sky is blue.",
-            Question.Noul("answer", "Is this true?", BooleanCriteria("true", "false")),
+            Question.Noul("answer", "Is the sky blue during the day?", BooleanCriteria()),
         ) as DecisionResult.Noul
 
-        assertTrue("noul was ${result.noul}", result.noul > 0.7)
+        assertEquals("", scorer.lastState)
         assertEquals(listOf("true", "false"), scorer.lastOptions)
         assertEquals(QuestionType.Noul, scorer.lastType)
+        assertTrue("noul was ${result.noul}", result.noul > 0.7)
+        repository.close()
+    }
+
+    @Test
+    fun `a state is forwarded when the user gives one`() = runBlocking {
+        val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
+        val repository = LayaRepository { scorer }
+        repository.start("/models/laya.gguf")
+        awaitReady(repository)
+
+        repository.decide(
+            Question.Noul("answer", "Is this claim true?"),
+            "The invoice total does not match the purchase order.",
+        )
+
+        assertEquals("The invoice total does not match the purchase order.", scorer.lastState)
         repository.close()
     }
 
@@ -128,14 +149,13 @@ class LayaRepositoryTest {
         awaitReady(repository)
 
         val result = repository.decide(
-            "I need a new computer.",
             Question.Choice(
                 "answer",
-                "What do they need?",
+                "Which do they need?",
                 listOf(
-                    Question.Choice.Option("laptop", "A portable computer"),
-                    Question.Choice.Option("phone", "A handheld device"),
-                    Question.Choice.Option("tablet", "A large touch device"),
+                    Question.Choice.Option("laptop", ""),
+                    Question.Choice.Option("phone", ""),
+                    Question.Choice.Option("tablet", ""),
                 ),
             ),
         ) as DecisionResult.Choice
@@ -156,8 +176,7 @@ class LayaRepositoryTest {
         awaitReady(repository)
 
         val result = repository.decide(
-            "A build failed.",
-            Question.Score("answer", "How bad?", listOf("low", "high")),
+            Question.Score("answer", "How severe is this?", listOf("low", "high")),
         ) as DecisionResult.Score
 
         assertEquals(listOf("0", "1"), scorer.lastOptions)
@@ -173,27 +192,8 @@ class LayaRepositoryTest {
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
-        repository.decide(
-            "state",
-            Question.Score("answer", "Rate.", listOf("low", "high")),
-        )
+        repository.decide(Question.Score("answer", "Rate.", listOf("low", "high")))
         assertEquals(1.25143f, scorer.lastTemperature, 1e-4f)
-        repository.close()
-    }
-
-    @Test
-    fun `a blank situation is refused before the model is consulted`() = runBlocking {
-        val scorer = FakeScorer()
-        val repository = LayaRepository { scorer }
-        repository.start("/models/laya.gguf")
-        awaitReady(repository)
-
-        val failure = runCatching {
-            repository.decide("   ", Question.Noul("answer", "Is it true?"))
-        }.exceptionOrNull()
-
-        assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
-        assertTrue("the scorer should not have run", scorer.lastOptions.isEmpty())
         repository.close()
     }
 
@@ -205,8 +205,7 @@ class LayaRepositoryTest {
 
         val failure = runCatching {
             repository.decide(
-                "state",
-                Question.Choice("answer", "Pick.", listOf(Question.Choice.Option("only", "One"))),
+                Question.Choice("answer", "Pick.", listOf(Question.Choice.Option("only", ""))),
             )
         }.exceptionOrNull()
 
@@ -219,12 +218,12 @@ class LayaRepositoryTest {
         val scorer = StandInScorer()
         fun ask(instructions: String) = scorer.score(
             ScoringRequest(
-                state = "state",
+                state = "",
                 instructions = instructions,
                 type = QuestionType.Choice,
                 options = listOf(
-                    ScoringRequest.Candidate("a", "A"),
-                    ScoringRequest.Candidate("b", "B"),
+                    ScoringRequest.Candidate("a", ""),
+                    ScoringRequest.Candidate("b", ""),
                 ),
             ),
             temperature = 1f,
@@ -247,21 +246,19 @@ class LayaRepositoryTest {
 
         // Each of the three modes must produce a usable shape with no GGUF present, since a
         // build without one still has to be demoable.
-        val noul = repository.decide("state", Question.Noul("a", "True?"))
+        val noul = repository.decide(Question.Noul("a", "Is it true?"))
         val choice = repository.decide(
-            "state",
             Question.Choice(
                 "b",
                 "Pick.",
                 listOf(
-                    Question.Choice.Option("x", "X"),
-                    Question.Choice.Option("y", "Y"),
+                    Question.Choice.Option("x", ""),
+                    Question.Choice.Option("y", ""),
                 ),
             ),
         )
         val score = repository.decide(
-            "state",
-            Question.Score("c", "How?", listOf("low", "high")),
+            Question.Score("c", "How severe?", listOf("low", "high")),
         )
 
         assertTrue(noul is DecisionResult.Noul)
