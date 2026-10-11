@@ -26,6 +26,7 @@ struct ChuseContext {
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
     const llama_vocab * vocab = nullptr;
+    llama_memory_t memory = nullptr;
     int n_vocab = 0;
 };
 
@@ -182,8 +183,10 @@ JNIEXPORT jlong JNICALL Java_com_chuse_inference_LlamaBridge_nativeLoad(JNIEnv *
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = 0;  // CPU only for now; a Vulkan build can raise this.
-    model_params.use_mmap = true;   // Keep the weights paged instead of read into the heap.
+    model_params.n_gpu_layers = 0;              // CPU only for now; a Vulkan build can raise this.
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;  // Page the weights in rather than reading
+                                                     // them into the heap. Renamed from the old
+                                                     // `use_mmap` bool in v0.6.0.
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
     if (model == nullptr) {
@@ -208,6 +211,7 @@ JNIEXPORT jlong JNICALL Java_com_chuse_inference_LlamaBridge_nativeLoad(JNIEnv *
     handle->model = model;
     handle->ctx = ctx;
     handle->vocab = llama_model_get_vocab(model);
+    handle->memory = llama_get_memory(ctx);
     handle->n_vocab = llama_vocab_n_tokens(handle->vocab);
     return reinterpret_cast<jlong>(handle);
 }
@@ -301,14 +305,15 @@ JNIEXPORT jfloatArray JNICALL Java_com_chuse_inference_LlamaBridge_nativeScore(
             }
             llama_batch_free(tail_batch);
             // Drop only this candidate's positions; the prompt cache stays warm for the next.
-            llama_kv_cache_seq_rm(handle->ctx, 0, prompt_length, -1);
+            // Renamed from llama_kv_cache_seq_rm in v0.6.0, which made the memory type explicit.
+            llama_memory_seq_rm(handle->memory, 0, prompt_length, -1);
         }
 
         scores.push_back(total);
     }
 
     // The prompt occupies the cache between calls; clear it so the next request starts clean.
-    llama_kv_cache_seq_rm(handle->ctx, 0, -1, -1);
+    llama_memory_seq_rm(handle->memory, 0, -1, -1);
 
     jfloatArray result = env->NewFloatArray(static_cast<jsize>(scores.size()));
     if (result == nullptr) return nullptr;
