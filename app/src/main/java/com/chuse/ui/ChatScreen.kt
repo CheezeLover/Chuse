@@ -81,7 +81,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chuse.R
 import com.chuse.core.DecisionResult
-import com.chuse.core.QuestionToStatement
 import com.chuse.data.ModelStatus
 import kotlin.math.roundToInt
 
@@ -124,26 +123,32 @@ fun ChatScreen(viewModel: LayaViewModel) {
         val text = question.trim()
         if (working || text.isEmpty()) return
 
-        // If the situation was left blank, derive it from the question. Measured on a
-        // balanced set this scores 16/20 against 12/20 for an empty field and 18/20 for a
-        // written one, so it recovers most of the gap for free. It is shown as a guess, and
-        // editable, because the user knows something the rule does not.
-        val derived = context.ifBlank { QuestionToStatement.derive(text) }.orEmpty()
-        val usedGuess = context.isBlank() && derived.isNotBlank()
+        // The situation is never filled in for the user. It used to be derived from the
+        // question by QuestionToStatement, on the strength of a 16/20-against-12/20
+        // measurement that did not survive being re-measured as the app really uses the rule:
+        // derived_state_real_probe scores it 10/20 against 14/20 for an empty field, because a
+        // statement derived from a question asserts the polarity being asked about, and the
+        // model takes its signal from the situation. An empty field answers near chance and
+        // says so; a derived one answers from a fact nobody stated. See docs/laya-measured.md.
+        val situation = context.trim()
 
         when (mode) {
-            Mode.YesNo -> viewModel.askYesNo(text, derived)
+            Mode.YesNo -> viewModel.askYesNo(text, situation)
             Mode.Choice -> {
                 val filled = choices.map { it.trim() }.filter { it.isNotEmpty() }
                 if (filled.size < 2) return
-                viewModel.askChoice(text, filled.map { it to "" }, derived)
+                viewModel.askChoice(text, filled.map { it to "" }, situation)
             }
 
-            Mode.Score -> viewModel.askScore(text, ScoreScale, derived)
+            Mode.Score -> viewModel.askScore(text, ScoreScale, situation)
         }
-        asked = Exchange(text, mode, derived, usedGuess)
-        question = ""
-        context = if (usedGuess) derived else context
+        asked = Exchange(text, mode, situation)
+        // The question is only cleared once there is a situation to re-ask against. With an
+        // empty one, clearing it would make the measured next step — add what it should judge,
+        // which is worth 14/20 against 10/20 — a full retype of a question the user already
+        // has. Left in the composer, the answer below says the same thing and the fix is to
+        // type under it.
+        if (situation.isNotBlank()) question = ""
     }
 
     fun clear() {
@@ -216,10 +221,8 @@ fun ChatScreen(viewModel: LayaViewModel) {
 private data class Exchange(
     val question: String,
     val mode: Mode,
-    /** The situation the answer was actually given against. */
+    /** The situation the answer was actually given against, empty if the user wrote none. */
     val context: String,
-    /** Whether that situation was derived from the question rather than written by the user. */
-    val contextWasGuessed: Boolean,
 )
 
 private enum class Mode(val labelRes: Int) {
@@ -499,7 +502,6 @@ private fun ExchangeBlock(exchange: Exchange?, working: Boolean, answer: Decisio
             answer != null -> AnswerBlock(
                 answer,
                 context = exchange?.context.orEmpty(),
-                contextWasGuessed = exchange?.contextWasGuessed == true,
             )
         }
     }
@@ -532,7 +534,6 @@ private fun ThinkingBlock() {
 private fun AnswerBlock(
     answer: DecisionResult,
     context: String,
-    contextWasGuessed: Boolean,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -549,10 +550,7 @@ private fun AnswerBlock(
             }
         }
         ConfidenceRow(answer)
-        when {
-            context.isBlank() -> WeakSignalNote()
-            contextWasGuessed -> DerivedContextNote()
-        }
+        if (context.isBlank()) WeakSignalNote()
     }
 }
 
@@ -586,40 +584,6 @@ private fun WeakSignalNote() {
                 text = stringResource(R.string.note_no_context),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-        }
-    }
-}
-
-/**
- * Says the situation was derived from the question rather than written.
- *
- * The derived statement is placed back into the situation field, so it is visible and
- * editable — this note is only there to say why a field the user left empty now has text in
- * it. A silent fill would look like the app had remembered something it was never told.
- */
-@Composable
-private fun DerivedContextNote() {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Icon(
-                Icons.Filled.Info,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(15.dp).padding(top = 2.dp),
-            )
-            Spacer(Modifier.width(9.dp))
-            Text(
-                text = stringResource(R.string.note_derived_context),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

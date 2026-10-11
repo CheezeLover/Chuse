@@ -13,7 +13,9 @@ package com.chuse.core
  * should not be blocked from asking: the interface explains what a missing state costs
  * rather than refusing the question. Measured on a balanced twenty cases: 18/20 with a state,
  * 12/20 without, and no fallback does better — repeating the question as the state scores
- * 10/20. See `docs/laya-measured.md`.
+ * 10/20, and deriving the state from the question with [QuestionToStatement] scores 10/20
+ * too, because a statement derived from a question asserts the polarity being asked about and
+ * so biases the answer towards true. See `docs/laya-measured.md`.
  *
  * The engine is deliberately free of Android types so it can be exercised on the JVM against
  * the live shim (see `ParityTest`).

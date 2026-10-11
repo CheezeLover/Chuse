@@ -23,7 +23,7 @@ So an answer given without one says so. See [`docs/laya-measured.md`](docs/laya-
 
 ## Status
 
-Everything is built and all 39 tests pass. The GGUF is **not committed** — 429 MB, and
+Everything is built and all 68 tests pass. The GGUF is **not committed** — 429 MB, and
 gitignored — so drop it in before building:
 
 ```bash

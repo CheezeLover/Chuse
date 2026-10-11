@@ -51,8 +51,6 @@
     <string name="thinking">Thinking…</string>
     <!-- States the measured cost of a missing situation rather than refusing the question. -->
     <string name="note_no_context">Without a situation this is close to a coin flip. Adding what it should judge makes a real difference.</string>
-    <!-- Explains why the situation field the user left empty now has text in it. -->
-    <string name="note_derived_context">No situation was given, so one was derived from the question. Edit it above if it is wrong.</string>
 
     <!-- What was asked -->
     <string name="bubble_choice">With choices</string>

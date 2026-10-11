@@ -69,6 +69,33 @@ class QuestionToStatementTest {
     }
 
     @Test
+    fun `a numeral subject is declined rather than split`() {
+        // "two" used to be treated as a determiner, so the subject ran to "two plus" and the
+        // rewrite came out as "Two plus is two equal to four." Declining is the whole point:
+        // a mangled statement is worse than none.
+        assertNull(QuestionToStatement.derive("Is two plus two equal to four?"))
+        assertNull(QuestionToStatement.derive("Is one of these correct?"))
+        assertNull(QuestionToStatement.derive("Is three people enough?"))
+    }
+
+    @Test
+    fun `a digit subject is still rewritten`() {
+        // Digits are a one-word subject, so the rule handles them and must keep doing so.
+        // Only spelled-out numerals are declined.
+        assertEquals("100 is greater than 50.", QuestionToStatement.derive("Is 100 greater than 50?"))
+        assertEquals("50 is greater than 100.", QuestionToStatement.derive("Is 50 greater than 100?"))
+    }
+
+    @Test
+    fun `a numeral after a determiner is declined too`() {
+        // "Is the two dogs friendly?" spans "the two", which the rewrite turned into
+        // "The two is dogs friendly." Nothing in the word sequence separates it from
+        // "Is the Earth round?", which the rule does handle, so the whole span is checked.
+        assertNull(QuestionToStatement.derive("Is the two dogs friendly?"))
+        assertNull(QuestionToStatement.derive("Does the two dogs bark?"))
+    }
+
+    @Test
     fun `wh questions are declined`() {
         assertNull(QuestionToStatement.derive("What is the capital of France?"))
         assertNull(QuestionToStatement.derive("Which option is best?"))
