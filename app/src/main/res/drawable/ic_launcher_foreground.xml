@@ -1,7 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
 <!--
-  A decision mark: one question resolving to a single branch. Drawn inside the 72dp adaptive
-  icon safe zone so no launcher mask clips it.
+  A faceted question mark: an angular hook and a diamond dot, rather than a smooth glyph.
+
+  Straight segments and a hard geometric dot read as deliberate at launcher size, where a
+  rounded question mark from a text font turns to mush. Drawn inside the 72dp adaptive-icon
+  safe zone so no launcher mask clips it.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -9,22 +11,17 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
+    <!-- The hook, drawn as one faceted stroke. -->
     <path
-        android:fillColor="#7BE0C0"
-        android:pathData="M54,28 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0" />
-    <path
-        android:fillColor="#7BE0C0"
-        android:pathData="M54,34 L54,52" />
-    <path
+        android:pathData="M34,44 L34,34 L44,24 L64,24 L74,34 L74,42 L54,58 L54,64"
         android:strokeColor="#7BE0C0"
-        android:strokeWidth="4.5"
+        android:strokeWidth="13"
         android:strokeLineCap="round"
-        android:fillColor="#00000000"
-        android:pathData="M54,52 L38,68" />
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+
+    <!-- The dot, a diamond rather than a circle: the hard edge is the point. -->
     <path
-        android:strokeColor="#F2C879"
-        android:strokeWidth="4.5"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000"
-        android:pathData="M54,52 L70,68" />
+        android:pathData="M54,74 L64,84 L54,94 L44,84 Z"
+        android:fillColor="#7BE0C0" />
 </vector>

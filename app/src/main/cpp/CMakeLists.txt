@@ -40,4 +40,7 @@ else()
 
     add_executable(noul_bias_probe tools/noul_bias_probe.cpp)
     target_link_libraries(noul_bias_probe PRIVATE chuse_decision)
+
+    add_executable(state_fallback_probe tools/state_fallback_probe.cpp)
+    target_link_libraries(state_fallback_probe PRIVATE chuse_decision)
 endif()

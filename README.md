@@ -15,10 +15,11 @@ the input zone to add the options or the scale, and nothing else changes.
 | **Choices** | a question, a situation, and two or more options | every option ranked |
 | **Score** | a question, a situation, and an optional scale | an expected level and its label |
 
-Both fields are required, and that is a measured decision rather than a formality. On a
-balanced twenty-case set the model answers **18/20** with a situation and **12/20** without
-one, with every probability sitting near a coin flip — which reads to a user as a lean towards
-false. See [`docs/laya-measured.md`](docs/laya-measured.md).
+The second field is optional, but the app tells you what it costs. On a balanced twenty-case
+set the model answers **18/20** with a situation and **12/20** without one, with every
+probability sitting near a coin flip — which reads as a lean towards false. Nothing substitutes
+for it either: repeating the question as the state scores 10/20, worse than sending nothing.
+So an answer given without one says so. See [`docs/laya-measured.md`](docs/laya-measured.md).
 
 ## Status
 

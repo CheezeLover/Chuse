@@ -49,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -136,7 +137,7 @@ fun ChatScreen(viewModel: LayaViewModel) {
                 viewModel.askScore(text, filled, context)
             }
         }
-        asked = Exchange(text, mode)
+        asked = Exchange(text, mode, context.isNotBlank())
         question = ""
     }
 
@@ -200,7 +201,7 @@ fun ChatScreen(viewModel: LayaViewModel) {
                     levels = levels,
                     onLevelsChange = { levels = it },
                     working = working,
-                    canAsk = question.isNotBlank() && context.isNotBlank() && valid(mode, choices, levels),
+                    canAsk = question.isNotBlank() && valid(mode, choices, levels),
                     onAsk = ::ask,
                 )
             }
@@ -209,7 +210,13 @@ fun ChatScreen(viewModel: LayaViewModel) {
 }
 
 /** What was asked, so the answer has something to be an answer to. */
-private data class Exchange(val question: String, val mode: Mode)
+/** What was asked, so the answer has something to be an answer to. */
+private data class Exchange(
+    val question: String,
+    val mode: Mode,
+    /** Whether a situation was supplied, which changes how much the answer is worth. */
+    val hadContext: Boolean,
+)
 
 private enum class Mode(val labelRes: Int) {
     YesNo(R.string.mode_yesno),
@@ -477,7 +484,7 @@ private fun ExchangeBlock(exchange: Exchange?, working: Boolean, answer: Decisio
 
         when {
             working -> ThinkingBlock()
-            answer != null -> AnswerBlock(answer)
+            answer != null -> AnswerBlock(answer, withoutContext = exchange?.hadContext == false)
         }
     }
 }
@@ -506,7 +513,7 @@ private fun ThinkingBlock() {
  * render "Yes, definitely" over a 54% is exactly the failure this app should not have.
  */
 @Composable
-private fun AnswerBlock(answer: DecisionResult) {
+private fun AnswerBlock(answer: DecisionResult, withoutContext: Boolean) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -522,6 +529,42 @@ private fun AnswerBlock(answer: DecisionResult) {
             }
         }
         ConfidenceRow(answer)
+        if (withoutContext) WeakSignalNote()
+    }
+}
+
+/**
+ * Says what a missing situation costs, rather than letting a near-throwaway answer look
+ * like a considered one.
+ *
+ * Measured on the real model: 18/20 on a balanced set with a situation, 12/20 without, with
+ * the probabilities collapsing toward a coin flip. That is the difference between a judgement
+ * and a shrug, and it is invisible in the number alone — so it is stated.
+ */
+@Composable
+private fun WeakSignalNote() {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Icon(
+                Icons.Filled.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(15.dp).padding(top = 2.dp),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text = stringResource(R.string.note_no_context),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+        }
     }
 }
 

@@ -42,7 +42,7 @@
 
     <!-- Input -->
     <string name="hint_question">Ask something…</string>
-    <string name="hint_optional_context">What should it judge? Both fields are needed.</string>
+    <string name="hint_optional_context">What should it judge? Optional, but it matters.</string>
     <string name="label_choice">Choice %1$d</string>
     <string name="action_add_choice">Add another choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>
@@ -51,6 +51,8 @@
     <string name="action_clear">Clear</string>
     <string name="action_ask">Ask</string>
     <string name="thinking">Thinking…</string>
+    <!-- States the measured cost of a missing situation rather than refusing the question. -->
+    <string name="note_no_context">Without a situation this is close to a coin flip. Adding what it should judge makes a real difference.</string>
 
     <!-- What was asked -->
     <string name="bubble_choice">With choices</string>

@@ -355,12 +355,13 @@ bool DecisionModel::score(
         if (error) *error = "a decision needs at least two options";
         return false;
     }
-    // The state is required, not optional. Upstream's /decide rejects a request without one,
-    // and measuring the real model shows why: with a state it answers 18/20 on a balanced
-    // set, without one it manages 12/20 with everything near 0.5. The question alone reads as
-    // a weak negative tilt rather than as the uncertainty it actually is.
-    if (instructions.empty() || state.empty()) {
-        if (error) *error = "a decision needs both a question and something to judge";
+    // The state is optional. Measured on a balanced twenty cases, the model answers 18/20
+    // with one and 12/20 without, so it is worth having but not worth refusing the question
+    // over. No substitute recovers it: repeating the question as the state scores 10/20,
+    // because the model wants facts rather than a reformulated question. The interface says
+    // what a missing state costs; this layer just accepts it.
+    if (instructions.empty()) {
+        if (error) *error = "a decision needs a question";
         return false;
     }
 

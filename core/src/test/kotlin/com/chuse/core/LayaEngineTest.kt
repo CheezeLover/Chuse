@@ -363,7 +363,7 @@ class LayaEngineTest {
     }
 
     @Test
-    fun `an empty state is rejected because a question alone is too weak`() {
+    fun `an empty state is allowed, because the user should not be blocked`() {
         var called = false
         val engine = LayaEngine(
             CandidateScorer { _, _ ->
@@ -371,15 +371,12 @@ class LayaEngineTest {
                 floatArrayOf(0f, 0f)
             },
         )
-        // Measured on a balanced 20-case set: 18/20 with a state, 12/20 without, with every
-        // probability near a coin flip. Accepting an empty state produced answers that read as
-        // a negative tilt rather than as the uncertainty they were.
-        val failure = runCatching {
-            engine.decide(Question.Noul("n", "Is it true?"), "")
-        }.exceptionOrNull()
-
-        assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
-        assertTrue("the scorer should not have run", !called)
+        // Measured on a balanced 20-case set: 18/20 with a state, 12/20 without, and no
+        // fallback does better — repeating the question as the state scores 10/20. Optional
+        // because the answer is still produced, not because it is as good.
+        val result = engine.decide(Question.Noul("n", "Is it true?"), "")
+        assertTrue("the scorer should have run", called)
+        assertTrue(result is DecisionResult.Noul)
     }
 
     @Test

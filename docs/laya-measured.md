@@ -76,9 +76,8 @@ with both state and instructions, and repeat identically for identical input. Th
 were an artefact of that probe, not a property of the model. Recorded here because the instinct
 on seeing impossible output is to trust it and look for a bug elsewhere.
 
-**The actual cause: the state was optional when it should not have been.** An earlier
-measurement appeared to show that a question alone still answered usefully, and the interface
-was simplified to one field on that basis. On a balanced set it does not:
+**The cause: the state was carrying almost all the signal, and the question very little.**
+On a balanced set:
 
 | Input | Correct | Mean P(true) when true | Mean P(true) when false | Gap |
 |---|---:|---:|---:|---:|
@@ -87,10 +86,21 @@ was simplified to one field on that basis. On a balanced set it does not:
 
 Without a state every probability sits near a coin flip and the gap nearly vanishes. That reads
 to a user as a lean towards false — a model that is uncertain and quiet looks like a model that
-is confident and wrong. Upstream agrees: `/decide` rejects a request with no `state`.
+is confident and wrong.
 
-The state is now required, the engine rejects an empty one, and the interface asks for both
-fields with the context one always visible rather than hidden behind a toggle.
+**No substitute recovers it.** Making the field optional only helps if something can stand in,
+and nothing does (`state_fallback_probe`):
+
+| State sent | Correct | Gap |
+|---|---:|---:|
+| The real state | 18/20 | +0.487 |
+| Empty | 12/20 | +0.104 |
+| A generic placeholder | 12/20 | +0.104 |
+| The question, repeated | 10/20 | +0.044 |
+
+Repeating the question is the *worst* option, which is the informative result: the model wants
+facts, not a reformulated question. The state is therefore optional in the interface but not
+substitutable, and an answer given without one carries a note saying what that costs.
 
 ### What remains weak
 

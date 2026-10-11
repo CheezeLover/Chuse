@@ -9,10 +9,11 @@ package com.chuse.core
  * `choice`, an expectation for `score`. Keeping the shared path shared is what stops the
  * three modes from drifting apart as they are tuned.
  *
- * [state] is required. It would read more cleanly to let the question stand alone, but a
- * question by itself is a weak prompt for this model: measured over a balanced twenty cases
- * it answers 18/20 with a state and 12/20 without one, and every probability sits near a coin
- * flip. The interface asks for both fields for that reason. See `docs/laya-measured.md`.
+ * [state] is optional. A question on its own is a weak prompt for this model, but the user
+ * should not be blocked from asking: the interface explains what a missing state costs
+ * rather than refusing the question. Measured on a balanced twenty cases: 18/20 with a state,
+ * 12/20 without, and no fallback does better — repeating the question as the state scores
+ * 10/20. See `docs/laya-measured.md`.
  *
  * The engine is deliberately free of Android types so it can be exercised on the JVM against
  * the live shim (see `ParityTest`).
@@ -22,11 +23,8 @@ class LayaEngine(
     private val temperatures: TemperatureTable = TemperatureTable.Default,
 ) {
 
-    fun decide(question: Question, state: String): DecisionResult {
+    fun decide(question: Question, state: String = ""): DecisionResult {
         val state = state.trim()
-        require(state.isNotBlank()) {
-            "a decision needs something to judge — a question alone is too weak a prompt"
-        }
 
         // One definition of the option order, shared with the result builders below. Having
         // it written twice is how the two copies drift and a probability ends up attached to

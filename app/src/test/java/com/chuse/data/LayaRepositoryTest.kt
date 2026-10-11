@@ -125,21 +125,22 @@ class LayaRepositoryTest {
     }
 
     @Test
-    fun `a yes-no question without a state is refused`() = runBlocking {
+    fun `a question without a state is answered, but it is a weak answer`() = runBlocking {
         val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
         val repository = LayaRepository { scorer }
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
-        // Measured on the real model: 18/20 on a balanced set with a state, 12/20 without,
-        // with every probability sitting near a coin flip. The interface asks for both fields
-        // rather than shipping answers that read as a negative tilt.
-        val failure = runCatching {
-            repository.decide(Question.Noul("answer", "Is the sky blue during the day?"), "")
-        }.exceptionOrNull()
+        // Measured on the real model: 18/20 on a balanced set with a state, 12/20 without.
+        // Optional because the user should not be blocked, not because the answers are as
+        // good — the interface states the difference alongside the answer.
+        val result = repository.decide(
+            Question.Noul("answer", "Is the sky blue during the day?"),
+            "",
+        ) as DecisionResult.Noul
 
-        assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
-        assertTrue("the scorer should not have run", scorer.lastOptions.isEmpty())
+        assertEquals("", scorer.lastState)
+        assertTrue(result.noul > 0.0)
         repository.close()
     }
 
