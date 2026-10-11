@@ -1,16 +1,26 @@
 package com.chuse.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,53 +31,60 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.chuse.R
 import com.chuse.core.DecisionResult
 import com.chuse.data.ModelStatus
 import kotlin.math.roundToInt
 
-/** Percentages are whole numbers: 97.56% would imply precision the model does not have. */
-private fun formatPercent(probability: Double): String =
-    "${(probability.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
-
 /**
- * The whole app: one page, input at the bottom, answers above.
+ * The app: one conversation-shaped page with a floating composer.
  *
- * Deliberately not a conversation. Asking clears the input and replaces the answer, so there
- * is always at most one question on screen and no scrollback to read back through — which is
- * the point of a System 1 tool rather than a chat window.
+ * A thread rather than a form-and-result, because that is what people expect from an
+ * interface like this — but deliberately *not* a conversation. Asking replaces the exchange
+ * rather than appending to it, so there is no scrollback and nothing to read back through.
+ * The app is a System 1 instrument, not a chat window, and the distinction shows in the
+ * absence of history rather than in a setting.
  */
 @Composable
 fun ChatScreen(viewModel: LayaViewModel) {
@@ -76,82 +93,104 @@ fun ChatScreen(viewModel: LayaViewModel) {
 
     var mode by remember { mutableStateOf(Mode.YesNo) }
     var question by remember { mutableStateOf("") }
-    var state by remember { mutableStateOf("") }
+    var context by remember { mutableStateOf("") }
     var choices by remember { mutableStateOf(listOf("", "")) }
-    var levels by remember { mutableStateOf(defaultLevels()) }
+    var levels by remember { mutableStateOf(DefaultLevels) }
 
-    val listState = rememberLazyListState()
+    // What was last asked, shown above the answer. Held here rather than read back out of the
+    // view model so clearing the answer and clearing the question are one action.
+    var asked by remember { mutableStateOf<Exchange?>(null) }
+
     val answer = (askState as? AskState.Answered)?.result
     val working = askState is AskState.Working
+    val listState = rememberLazyListState()
 
-    // Keep the newest content visible when the answer lands or the input zone expands.
-    LaunchedEffect(answer, mode, choices.size, levels.size) {
-        listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+    LaunchedEffect(answer, working) {
+        if (answer != null || working) listState.animateScrollToItem(0)
     }
 
     fun ask() {
-        if (working || question.isBlank()) return
+        val text = question.trim()
+        if (working || text.isEmpty()) return
         when (mode) {
-            Mode.YesNo -> viewModel.askYesNo(question, state)
+            Mode.YesNo -> viewModel.askYesNo(text, context)
             Mode.Choice -> {
-                val filled = choices.filter { it.isNotBlank() }
-                if (filled.size >= 2) viewModel.askChoice(question, filled.map { it to "" }, state)
+                val filled = choices.map { it.trim() }.filter { it.isNotEmpty() }
+                if (filled.size < 2) return
+                viewModel.askChoice(text, filled.map { it to "" }, context)
             }
 
             Mode.Score -> {
-                val filled = levels.filter { it.isNotBlank() }
-                if (filled.size >= 2) viewModel.askScore(question, filled, state)
+                val filled = levels.map { it.trim() }.filter { it.isNotEmpty() }
+                if (filled.size < 2) return
+                viewModel.askScore(text, filled, context)
             }
         }
+        asked = Exchange(text, mode)
+        question = ""
     }
 
-    Surface(color = MaterialTheme.colorScheme.background) {
+    fun clear() {
+        viewModel.reset()
+        asked = null
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Header(modelStatus, onClear = { viewModel.reset() })
+            TopBar(status = modelStatus, onClear = ::clear, hasExchange = asked != null)
 
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 16.dp, end = 16.dp, bottom = 12.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                item("spacer") { Spacer(Modifier.height(4.dp)) }
+                item("thread") {
+                    when {
+                        working || answer != null -> ExchangeBlock(
+                            exchange = asked,
+                            working = working,
+                            answer = answer,
+                        )
 
-                if (answer != null) {
-                    item("answer") { AnswerBlock(answer) }
-                } else {
-                    item("hint") { HintBlock(mode) }
+                        else -> WelcomeBlock(
+                            mode = mode,
+                            onSuggestion = { suggestion ->
+                                question = suggestion
+                            },
+                        )
+                    }
                 }
             }
 
-            InputZone(
+            Composer(
                 mode = mode,
-                onModeChange = { newMode ->
-                    mode = newMode
+                onModeChange = {
+                    mode = it
                     viewModel.reset()
                 },
                 question = question,
                 onQuestionChange = { question = it },
-                state = state,
-                onStateChange = { state = it },
+                context = context,
+                onContextChange = { context = it },
                 choices = choices,
                 onChoicesChange = { choices = it },
                 levels = levels,
                 onLevelsChange = { levels = it },
-                canAsk = question.isNotBlank() &&
-                    when (mode) {
-                        Mode.YesNo -> true
-                        Mode.Choice -> choices.count { it.isNotBlank() } >= 2
-                        Mode.Score -> levels.count { it.isNotBlank() } >= 2
-                    },
                 working = working,
+                canAsk = question.isNotBlank() && valid(mode, choices, levels),
                 onAsk = ::ask,
             )
         }
     }
 }
+
+/** What was asked, so the answer has something to be an answer to. */
+private data class Exchange(val question: String, val mode: Mode)
 
 private enum class Mode(val labelRes: Int) {
     YesNo(R.string.mode_yesno),
@@ -159,117 +198,290 @@ private enum class Mode(val labelRes: Int) {
     Score(R.string.mode_score),
 }
 
-private fun defaultLevels(): List<String> =
-    listOf("Very low", "Low", "Medium", "High", "Very high")
+private val DefaultLevels = listOf("Very low", "Low", "Medium", "High", "Very high")
+
+private fun valid(mode: Mode, choices: List<String>, levels: List<String>): Boolean = when (mode) {
+    Mode.YesNo -> true
+    Mode.Choice -> choices.count { it.isNotBlank() } >= 2
+    Mode.Score -> levels.count { it.isNotBlank() } >= 2
+}
+
+// ---------------------------------------------------------------------------
+// Chrome
+// ---------------------------------------------------------------------------
 
 @Composable
-private fun Header(status: ModelStatus, onClear: () -> Unit) {
+private fun TopBar(status: ModelStatus, onClear: () -> Unit, hasExchange: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .background(MaterialTheme.colorScheme.background)
+            .padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.2).sp,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.weight(1f))
-        ModelDot(status)
-        Spacer(Modifier.width(6.dp))
-        IconButton(onClick = onClear) {
-            Icon(
-                Icons.Filled.Refresh,
-                contentDescription = stringResource(R.string.action_clear),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        ModelStatusDot(status)
+        AnimatedVisibility(visible = hasExchange, enter = fadeIn(), exit = fadeOut()) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.action_clear),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
 
 /**
- * A quiet status dot rather than a banner.
+ * Model state as a dot and a word.
  *
- * The one thing that must stay unmissable is a missing model, because that changes what the
- * answers are — so that state still speaks up.
+ * Deliberately quiet. The only state that must be unmissable is a failed model, which is why
+ * that one is coloured and the rest are not — a permanent banner saying "ready" would be
+ * noise on every single launch.
  */
 @Composable
-private fun ModelDot(status: ModelStatus) {
-    data class Dot(val colour: Color, val labelRes: Int)
-
-    val dot = when (status) {
-        ModelStatus.Loading -> Dot(MaterialTheme.colorScheme.outline, R.string.model_loading)
+private fun ModelStatusDot(status: ModelStatus) {
+    val (colour, label) = when (status) {
+        ModelStatus.Loading -> MaterialTheme.colorScheme.outlineVariant to R.string.model_loading
         is ModelStatus.Ready ->
-            if (status.isStandIn) Dot(MaterialTheme.colorScheme.tertiary, R.string.model_standin)
-            else Dot(MaterialTheme.colorScheme.primary, R.string.model_ready)
+            if (status.isStandIn) {
+                MaterialTheme.colorScheme.tertiary to R.string.model_standin
+            } else {
+                MaterialTheme.colorScheme.primary to R.string.model_ready
+            }
 
-        is ModelStatus.Failed -> Dot(MaterialTheme.colorScheme.error, R.string.model_failed_dot)
+        is ModelStatus.Failed -> MaterialTheme.colorScheme.error to R.string.model_failed_dot
     }
+
+    val animatedColour by animateColorAsState(colour, label = "status")
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (status is ModelStatus.Loading) {
-            CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp)
+            PulsingDot(color = MaterialTheme.colorScheme.outlineVariant)
         } else {
             Box(
                 Modifier
-                    .size(8.dp)
-                    .background(dot.colour, RoundedCornerShape(4.dp)),
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(animatedColour),
             )
         }
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(7.dp))
         Text(
-            text = stringResource(dot.labelRes),
+            text = stringResource(label),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
 
+/** A slow breathing dot, used for both "loading" and "thinking". */
 @Composable
-private fun HintBlock(mode: Mode) {
-    val text = when (mode) {
-        Mode.YesNo -> R.string.hint_yesno
-        Mode.Choice -> R.string.hint_choice
-        Mode.Score -> R.string.hint_score
-    }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+private fun PulsingDot(color: Color, size: androidx.compose.ui.unit.Dp = 7.dp) {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
+        label = "pulse-alpha",
+    )
+    Box(
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(color.copy(alpha = alpha)),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The thread
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WelcomeBlock(mode: Mode, onSuggestion: (String) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(
             text = stringResource(R.string.prompt_start),
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.3).sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.prompt_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 280.dp),
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = stringResource(text),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.outline,
-            textAlign = TextAlign.Center,
-        )
+        Spacer(Modifier.height(28.dp))
+        SuggestionRow(mode, onSuggestion)
     }
 }
 
 /**
+ * Tappable examples.
+ *
+ * Worth the space on an empty screen: this model takes a question in any phrasing, so showing
+ * three real ones teaches the shape of a good input faster than instructions would.
+ */
+@Composable
+private fun SuggestionRow(mode: Mode, onSuggestion: (String) -> Unit) {
+    val suggestions = when (mode) {
+        Mode.YesNo -> listOf(
+            R.string.example_yesno_1,
+            R.string.example_yesno_2,
+            R.string.example_yesno_3,
+        )
+
+        Mode.Choice -> listOf(R.string.example_choice_1, R.string.example_choice_2)
+        Mode.Score -> listOf(R.string.example_score_1, R.string.example_score_2)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        suggestions.forEach { res ->
+            // Resolved here rather than inside the click handler: stringResource is
+            // @Composable and the lambda is not a composable scope.
+            val label = stringResource(res)
+            Surface(
+                onClick = { onSuggestion(label) },
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.widthIn(max = 340.dp),
+            ) {
+                Text(
+                    text = stringResource(res),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One exchange: the question as a bubble, the answer beneath it.
+ *
+ * Showing the question matters more than it sounds. An answer with no question attached reads
+ * as a verdict on everything, and this model is far more equivocal than a bare True/False
+ * would suggest — the bubble is what keeps the number honest about what it refers to.
+ */
+@Composable
+private fun ExchangeBlock(exchange: Exchange?, working: Boolean, answer: DecisionResult?) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        exchange?.let { asked ->
+            AnimatedVisibility(
+                visible = true,
+                enter = fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 12 },
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(
+                            topStart = 20.dp,
+                            topEnd = 20.dp,
+                            bottomStart = 20.dp,
+                            bottomEnd = 6.dp,
+                        ),
+                        modifier = Modifier.widthIn(max = 300.dp),
+                    ) {
+                        Column {
+                            Text(
+                                text = asked.question,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                            )
+                            // Name the mode only when it added something beyond the question,
+                            // so the bubble stays a plain question for a plain yes/no.
+                            if (asked.mode != Mode.YesNo) {
+                                Text(
+                                    text = stringResource(
+                                        when (asked.mode) {
+                                            Mode.Choice -> R.string.bubble_choice
+                                            Mode.Score -> R.string.bubble_score
+                                            Mode.YesNo -> R.string.mode_yesno
+                                        },
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        .copy(alpha = 0.65f),
+                                    modifier = Modifier.padding(
+                                        start = 16.dp, end = 16.dp, bottom = 9.dp,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        when {
+            working -> ThinkingBlock()
+            answer != null -> AnswerBlock(answer)
+        }
+    }
+}
+
+@Composable
+private fun ThinkingBlock() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        PulsingDot(color = MaterialTheme.colorScheme.primary, size = 8.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = stringResource(R.string.thinking),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Answers
+// ---------------------------------------------------------------------------
+
+/**
  * The answer, large.
  *
- * Deliberately not a sentence: Laya returns a distribution, not a conclusion, and dressing a
- * coin flip up as a verdict is the one thing worth avoiding here. The percentage carries the
- * weight of the claim.
+ * Not a sentence. Laya returns a distribution rather than a conclusion, and the temptation to
+ * render "Yes, definitely" over a 54% is exactly the failure this app should not have.
  */
 @Composable
 private fun AnswerBlock(answer: DecisionResult) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        when (answer) {
-            is DecisionResult.Noul -> VerdictAnswer(answer)
-            is DecisionResult.Choice -> RankingAnswer(answer)
-            is DecisionResult.Score -> ScoreAnswer(answer)
+        AnimatedVisibility(
+            visible = true,
+            enter = fadeIn(tween(260)) + slideInVertically(tween(300)) { it / 10 },
+        ) {
+            when (answer) {
+                is DecisionResult.Noul -> VerdictAnswer(answer)
+                is DecisionResult.Choice -> RankingAnswer(answer)
+                is DecisionResult.Score -> ScoreAnswer(answer)
+            }
         }
-        Spacer(Modifier.height(14.dp))
         ConfidenceRow(answer)
     }
 }
@@ -278,62 +490,84 @@ private fun AnswerBlock(answer: DecisionResult) {
 private fun VerdictAnswer(answer: DecisionResult.Noul) {
     val isTrue = answer.noul >= 0.5
     val verdict = stringResource(if (isTrue) R.string.result_true else R.string.result_false)
-    // Animated so the number lands rather than blinking into place.
-    val shown by animateFloatAsState(answer.noul.toFloat(), tween(600), label = "noul")
+    val shown by animateFloatAsState(
+        answer.noul.toFloat(),
+        spring(dampingRatio = 0.8f, stiffness = 120f),
+        label = "noul",
+    )
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = verdict,
-            style = MaterialTheme.typography.displayLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = formatPercent(shown.toDouble()),
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = verdict,
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-1).sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = formatPercent(shown.toDouble()),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+        // A bar under the verdict, so the number has a shape as well as a value.
+        VerdictBar(answer.noul)
     }
 }
 
 @Composable
 private fun RankingAnswer(answer: DecisionResult.Choice) {
     val ranked = answer.probabilities.entries.sortedByDescending { it.value }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ranked.forEachIndexed { index, (label, probability) ->
-            val animated by animateFloatAsState(
-                probability.toFloat(), tween(700), label = "rank",
+            val shown by animateFloatAsState(
+                probability.toFloat(),
+                spring(dampingRatio = 0.85f, stiffness = 140f),
+                label = "rank",
             )
-            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = label,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = if (index == 0) FontWeight.Bold else FontWeight.Normal,
+                        fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Normal,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         text = formatPercent(probability),
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium,
+                        color = if (index == 0) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
-                Spacer(Modifier.height(5.dp))
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(10.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(5.dp),
-                        ),
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Box(
                         Modifier
-                            .fillMaxWidth(animated.coerceIn(0f, 1f))
-                            .height(10.dp)
-                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(5.dp)),
+                            .fillMaxWidth(shown.coerceIn(0f, 1f))
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(
+                                if (index == 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outline
+                                },
+                            ),
                     )
                 }
             }
@@ -344,277 +578,503 @@ private fun RankingAnswer(answer: DecisionResult.Choice) {
 @Composable
 private fun ScoreAnswer(answer: DecisionResult.Score) {
     val levels = answer.legend.values.toList()
-    val rounded = answer.score.roundToInt().coerceIn(0, levels.lastIndex)
-    val shown by animateFloatAsState(answer.score.toFloat(), tween(700), label = "score")
+    if (levels.isEmpty()) return
+    val top = (levels.size - 1).coerceAtLeast(1).toFloat()
+    val position = (answer.score / top).toFloat().coerceIn(0f, 1f)
+    val shown by animateFloatAsState(
+        position,
+        spring(dampingRatio = 0.8f, stiffness = 130f),
+        label = "score",
+    )
+    val nearest = (answer.score.roundToInt()).coerceIn(0, levels.lastIndex)
 
-    Column(
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = answer.score.roundToInt().toString(),
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-1).sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.result_of, top.roundToInt().toString()),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 7.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = levels.getOrElse(nearest) { "" },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 7.dp),
+            )
+        }
+        // A tick per level, filled to the score, so a hedged answer is visible as a gap.
+        ScoreTrack(levels.size, shown)
+    }
+}
+
+/**
+ * One segment per level, filled up to the score.
+ *
+ * Segments rather than a single bar because a score of 3 out of 4 is not the same claim as
+ * "75% of something" — the scale has meaning the bar would flatten away.
+ */
+@Composable
+private fun ScoreTrack(levelCount: Int, position: Float) {
+    val steps = levelCount.coerceAtLeast(1).toFloat()
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Text(
-            text = shown.roundToInt().toString(),
-            style = MaterialTheme.typography.displayLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = stringResource(R.string.result_of, levels.lastIndex.toString()),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = levels.getOrElse(rounded) { levels.firstOrNull().orEmpty() },
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
+        repeat(levelCount.coerceAtLeast(1)) { index ->
+            // How far the score has travelled into this segment, 0..1.
+            val fill = (position * steps - index).coerceIn(0f, 1f)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fill)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A single bar under a verdict.
+ *
+ * Always fills from the left, so it reads as "how much true" regardless of which way the
+ * answer went — a bar that filled from the right would make a false answer look like a full
+ * one at a glance.
+ */
+@Composable
+private fun VerdictBar(proportion: Double) {
+    val shown by animateFloatAsState(
+        proportion.toFloat().coerceIn(0f, 1f),
+        spring(dampingRatio = 0.85f, stiffness = 140f),
+        label = "verdict-bar",
+    )
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(shown)
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.primary),
         )
     }
 }
 
-/** The two readings, side by side. They are different numbers and mean different things. */
+/**
+ * The two readings.
+ *
+ * They are different quantities under similar names — the probability the answer is right, and
+ * how far the distribution sits from a coin flip — so both are shown rather than picking one
+ * and calling it confidence.
+ */
 @Composable
 private fun ConfidenceRow(answer: DecisionResult) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                RoundedCornerShape(16.dp),
-            )
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Metric(
-            formatPercent(answer.answerConfidence),
-            stringResource(R.string.confidence_label),
-            stringResource(R.string.confidence_hint),
-            Modifier.weight(1f),
+            value = formatPercent(answer.answerConfidence),
+            label = stringResource(R.string.confidence_label),
+            hint = stringResource(R.string.confidence_hint),
+            modifier = Modifier.weight(1f),
         )
         Metric(
-            formatPercent(answer.confidence),
-            stringResource(R.string.certainty_label),
-            stringResource(R.string.certainty_hint),
-            Modifier.weight(1f),
+            value = formatPercent(answer.confidence),
+            label = stringResource(R.string.certainty_label),
+            hint = stringResource(R.string.certainty_hint),
+            modifier = Modifier.weight(1f),
         )
     }
 }
 
 @Composable
 private fun Metric(value: String, label: String, hint: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier,
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.5).sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 14.sp,
+            )
+        }
     }
 }
 
+// ---------------------------------------------------------------------------
+// The composer
+// ---------------------------------------------------------------------------
+
 /**
- * The input zone, which grows when a mode needs more than one field.
+ * The input zone, pinned to the bottom and grown when a mode needs more.
  *
- * Keeping everything below the answer means the layout never shifts under the reader: the
- * question and its answer are always in the same place relative to each other.
+ * A segmented control rather than chips: the three modes are mutually exclusive peers, and a
+ * segmented control says that where three separate chips say "pick any".
  */
 @Composable
-private fun InputZone(
+private fun Composer(
     mode: Mode,
     onModeChange: (Mode) -> Unit,
     question: String,
     onQuestionChange: (String) -> Unit,
-    state: String,
-    onStateChange: (String) -> Unit,
+    context: String,
+    onContextChange: (String) -> Unit,
     choices: List<String>,
     onChoicesChange: (List<String>) -> Unit,
     levels: List<String>,
     onLevelsChange: (List<String>) -> Unit,
-    canAsk: Boolean,
     working: Boolean,
+    canAsk: Boolean,
     onAsk: () -> Unit,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ModeSelector(mode, onModeChange, Modifier.padding(horizontal = 4.dp, vertical = 6.dp))
+
+        AnimatedVisibility(
+            visible = mode == Mode.Choice,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Mode.entries.forEach { candidate ->
-                    val selected = candidate == mode
-                    FilterChip(
-                        selected = selected,
-                        onClick = { onModeChange(candidate) },
-                        label = { Text(stringResource(candidate.labelRes)) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ChoiceFields(choices, onChoicesChange)
+        }
+
+        AnimatedVisibility(
+            visible = mode == Mode.Score,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            LevelFields(levels, onLevelsChange)
+        }
+
+        AnimatedVisibility(
+            visible = context.isNotEmpty() || mode != Mode.YesNo,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            CompactField(
+                value = context,
+                onValueChange = onContextChange,
+                placeholder = stringResource(R.string.hint_optional_context),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            )
+        }
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            shape = RoundedCornerShape(26.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (question.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.hint_question),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    }
+                    BasicTextField(
+                        value = question,
+                        onValueChange = onQuestionChange,
+                        textStyle = LocalTextStyle.current.merge(
+                            TextStyle(color = MaterialTheme.colorScheme.onSurface),
                         ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 5,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(
+                            onGo = {
+                                if (canAsk) {
+                                    onAsk()
+                                    keyboard?.hide()
+                                }
+                            },
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester)
+                            .padding(vertical = 12.dp),
                     )
                 }
-            }
-
-            AnimatedVisibility(
-                visible = mode == Mode.Choice,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                ChoiceFields(choices, onChoicesChange)
-            }
-
-            AnimatedVisibility(
-                visible = mode == Mode.Score,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                LevelFields(levels, onLevelsChange)
-            }
-
-            AnimatedVisibility(
-                visible = state.isNotEmpty() || mode != Mode.YesNo,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = state,
-                        onValueChange = onStateChange,
-                        label = { Text(stringResource(R.string.label_optional_context)) },
-                        placeholder = { Text(stringResource(R.string.hint_optional_context)) },
-                        shape = MaterialTheme.shapes.large,
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 1,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            Row(verticalAlignment = Alignment.Bottom) {
-                OutlinedTextField(
-                    value = question,
-                    onValueChange = onQuestionChange,
-                    placeholder = { Text(stringResource(R.string.hint_question)) },
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 4,
-                )
                 Spacer(Modifier.width(8.dp))
-                SendButton(enabled = canAsk && !working, working = working, onClick = onAsk)
+                SendButton(
+                    working = working,
+                    enabled = canAsk && !working,
+                    onClick = {
+                        onAsk()
+                        keyboard?.hide()
+                    },
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SendButton(enabled: Boolean, working: Boolean, onClick: () -> Unit) {
-    val container = if (enabled) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val content = if (enabled) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .size(52.dp)
-            .background(container, RoundedCornerShape(26.dp)),
+private fun ModeSelector(mode: Mode, onChange: (Mode) -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.fillMaxWidth(),
     ) {
-        if (working) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        } else {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = content)
+        Row(modifier = Modifier.padding(3.dp)) {
+            Mode.entries.forEach { candidate ->
+                val selected = candidate == mode
+                val background by animateColorAsState(
+                    if (selected) MaterialTheme.colorScheme.surface else Color.Transparent,
+                    label = "segment-bg",
+                )
+                val content by animateColorAsState(
+                    if (selected) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    label = "segment-fg",
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(17.dp))
+                        .background(background)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onChange(candidate) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(candidate.labelRes),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = content,
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun SendButton(
+    working: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val container by animateColorAsState(
+        when {
+            working -> MaterialTheme.colorScheme.errorContainer
+            enabled -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        },
+        label = "send-bg",
+    )
+    val tint by animateColorAsState(
+        when {
+            working -> MaterialTheme.colorScheme.onErrorContainer
+            enabled -> MaterialTheme.colorScheme.onPrimary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        },
+        label = "send-fg",
+    )
+
+    Surface(
+        onClick = onClick,
+        enabled = enabled && !working,
+        color = container,
+        shape = CircleShape,
+        modifier = modifier.size(40.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (working) {
+                Icon(
+                    Icons.Filled.Stop,
+                    contentDescription = stringResource(R.string.action_clear),
+                    tint = tint,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                Icon(
+                    Icons.Filled.ArrowUpward,
+                    contentDescription = stringResource(R.string.action_ask),
+                    tint = tint,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = LocalTextStyle.current.merge(
+                TextStyle(color = MaterialTheme.colorScheme.onSurface),
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            maxLines = 3,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            decorationBox = { inner ->
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+                inner()
+            },
+        )
     }
 }
 
 @Composable
 private fun ChoiceFields(choices: List<String>, onChange: (List<String>) -> Unit) {
-    Column(modifier = Modifier.padding(top = 8.dp)) {
+    Column(
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         choices.forEachIndexed { index, value ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { updated ->
-                        onChange(choices.toMutableList().also { it[index] = updated })
-                    },
-                    placeholder = {
-                        Text(stringResource(R.string.label_choice, index + 1))
-                    },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.weight(1f),
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.label_choice, index + 1),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                        )
+                    }
+                    CompactField(
+                        value = value,
+                        onValueChange = { updated ->
+                            onChange(choices.toMutableList().also { it[index] = updated })
+                        },
+                        placeholder = "",
+                    )
+                }
                 if (choices.size > 2) {
-                    IconButton(onClick = { onChange(choices.filterIndexed { i, _ -> i != index }) }) {
+                    IconButton(
+                        onClick = { onChange(choices.filterIndexed { i, _ -> i != index }) },
+                        modifier = Modifier.size(36.dp),
+                    ) {
                         Icon(
                             Icons.Filled.Close,
                             contentDescription = stringResource(R.string.action_remove_choice, index + 1),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
             }
-            Spacer(Modifier.height(6.dp))
         }
-        AddRowButton(R.string.action_add_choice) {
-            onChange(choices + "")
-        }
+        AddRowButton(R.string.action_add_choice) { onChange(choices + "") }
     }
 }
 
 @Composable
 private fun LevelFields(levels: List<String>, onChange: (List<String>) -> Unit) {
-    Column(modifier = Modifier.padding(top = 8.dp)) {
+    Column(
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             levels.forEachIndexed { index, value ->
-                OutlinedTextField(
+                CompactField(
                     value = value,
                     onValueChange = { updated ->
                         onChange(levels.toMutableList().also { it[index] = updated })
                     },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.large,
+                    placeholder = "${index + 1}",
                     modifier = Modifier.weight(1f),
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = stringResource(R.string.label_scale_order),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(start = 6.dp),
             )
-            IconButton(onClick = { onChange(levels + "") }) {
+            IconButton(onClick = { onChange(levels + "") }, modifier = Modifier.size(32.dp)) {
                 Icon(
                     Icons.Filled.Add,
                     contentDescription = stringResource(R.string.action_add_level),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
@@ -623,9 +1083,31 @@ private fun LevelFields(levels: List<String>, onChange: (List<String>) -> Unit) 
 
 @Composable
 private fun AddRowButton(labelRes: Int, onClick: () -> Unit) {
-    androidx.compose.material3.TextButton(onClick = onClick) {
-        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(4.dp))
-        Text(stringResource(labelRes), style = MaterialTheme.typography.labelLarge)
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(labelRes),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
+
+/** Percentages are whole numbers: "97.56%" would imply precision the model does not have. */
+private fun formatPercent(probability: Double): String =
+    "${(probability.coerceIn(0.0, 1.0) * 100).roundToInt()}%"

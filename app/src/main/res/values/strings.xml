@@ -6,22 +6,33 @@
     <string name="mode_choice">Choices</string>
     <string name="mode_score">Score</string>
 
-    <!-- Prompts before anything has been asked -->
-    <string name="prompt_start">Ask Laya something</string>
-    <string name="hint_yesno">"Is the sky blue during the day?"</string>
-    <string name="hint_choice">Ask a question, then list the options below.</string>
-    <string name="hint_score">Ask for a score, then set the scale below.</string>
+    <!-- Empty state -->
+    <string name="prompt_start">Ask Laya a question</string>
+    <string name="prompt_subtitle">One question, one answer. No memory of what came before.</string>
+
+    <string name="example_yesno_1">Is the sky blue during the day?</string>
+    <string name="example_yesno_2">Can a phone run a model entirely offline?</string>
+    <string name="example_yesno_3">Is it safe to delete the backup before a migration?</string>
+    <string name="example_choice_1">Which is the best next step after a failed deploy?</string>
+    <string name="example_choice_2">How should an invoice mismatch be handled?</string>
+    <string name="example_score_1">How severe is an outage that lasted 4 hours?</string>
+    <string name="example_score_2">How confident are you that this refactor is safe?</string>
 
     <!-- Input -->
-    <string name="hint_question">Ask a question…</string>
-    <string name="label_optional_context">Context (optional)</string>
-    <string name="hint_optional_context">What should it judge? Sharper answers.</string>
+    <string name="hint_question">Ask something…</string>
+    <string name="hint_optional_context">Optional context — what should it judge?</string>
     <string name="label_choice">Choice %1$d</string>
-    <string name="action_add_choice">Add choice</string>
+    <string name="action_add_choice">Add another choice</string>
     <string name="action_remove_choice">Remove choice %1$d</string>
-    <string name="action_add_level">Add level</string>
+    <string name="action_add_level">Add another level</string>
     <string name="label_scale_order">Scale, lowest to highest</string>
     <string name="action_clear">Clear</string>
+    <string name="action_ask">Ask</string>
+    <string name="thinking">Thinking…</string>
+
+    <!-- What was asked -->
+    <string name="bubble_choice">With choices</string>
+    <string name="bubble_score">On a scale</string>
 
     <!-- Answers -->
     <string name="result_true">True</string>
@@ -30,7 +41,7 @@
 
     <!-- The two readings -->
     <string name="confidence_label">Confidence</string>
-    <string name="confidence_hint">Chance the answer is right</string>
+    <string name="confidence_hint">Chance this answer is right</string>
     <string name="certainty_label">Certainty</string>
     <string name="certainty_hint">How far from a coin flip</string>
 
@@ -39,9 +50,6 @@
     <string name="model_ready">Ready</string>
     <string name="model_standin">Stand-in</string>
     <string name="model_failed_dot">Model failed</string>
-    <string name="model_missing_body">This build has no GGUF, so answers come from a stand-in. Drop model.gguf into app/src/main/assets and rebuild.</string>
-    <string name="model_failed">Could not load the model: %1$s</string>
 
-    <!-- Errors -->
     <string name="error_ask_failed">That question could not be answered: %1$s</string>
 </resources>
