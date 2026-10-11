@@ -73,9 +73,9 @@ class LayaRepository(private val loadScorer: (String) -> CloseableScorer) : Clos
      */
     suspend fun decide(
         situation: String,
-        questions: List<Question>,
-    ): Map<String, DecisionResult> = withContext(Dispatchers.Default) {
-        LayaEngine(scorer).decide(situation, questions)
+        question: Question,
+    ): DecisionResult = withContext(Dispatchers.Default) {
+        LayaEngine(scorer).decide(situation, question)
     }
 
     override fun close() {
@@ -100,14 +100,15 @@ class LayaRepository(private val loadScorer: (String) -> CloseableScorer) : Clos
  */
 class StandInScorer : CloseableScorer {
 
-    override fun score(request: ScoringRequest): FloatArray = FloatArray(request.candidates.size) { index ->
-        // Hashing the candidate with the request keeps the ranking stable for a given
-        // question while varying it across questions.
-        val seed = (request.user + request.candidates[index]).hashCode()
-        // Spread across about two logits, so softmax lands on a decisive but not degenerate
-        // distribution — the shape a real small model produces, rather than a coin flip.
-        ((seed ushr 8) % 1000) / 1000f * 2f - 1f
-    }
+    override fun score(request: ScoringRequest, temperature: Float): FloatArray =
+        FloatArray(request.options.size) { index ->
+            // Hashing the option with the request keeps the ranking stable for a given
+            // question while varying it across questions.
+            val seed = (request.instructions + request.options[index].key).hashCode()
+            // Spread across about two logits, so softmax lands on a decisive but not degenerate
+            // distribution — the shape a real model produces, rather than a coin flip.
+            ((seed ushr 8) % 1000) / 1000f * 2f - 1f
+        }
 
     override fun close() = Unit
 }

@@ -33,6 +33,14 @@ Not autoregressive. One encoder pass, no tokens generated:
    the number of options. Without this the probabilities are not comparable.
 6. Apply the TypeSafe confidence formulas.
 
+The template is reimplemented in C++ rather than run through a Jinja engine: it is ~1.5 KB
+of known text with no branching beyond the three question types, and an interpreter for it
+would cost far more than the few lines that render it.
+
+A `noul` question keeps the keys `"true"` and `"false"` even when the user supplies their own
+wording — the model's two output columns mean those things positionally, and the criteria
+are the description, not the key.
+
 ## Temperatures (from the model)
 
 Selected by `temperature.<type>.<bucket>`, falling back to `temperature.<type>`:
@@ -64,7 +72,26 @@ when the uniform denominator matches.
 
 ## What is still unverified
 
-The native decision path has never been executed — that needs a device or an emulator.
-What *is* verified: llama.cpp v0.6.0 cross-compiles for arm64, its symbols match the Kotlin
-declarations, and the model's metadata and template parse correctly under llama.cpp's own
-reader on the host.
+The native decision path has never been executed on a device — that needs real hardware or
+an emulator. What *is* verified:
+
+- llama.cpp v0.6.0 cross-compiles for arm64-v8a and x86_64, and the three JNI entry points
+  are exported under exactly the names Kotlin's `external` declarations resolve to
+  (`Java_com_chuse_inference_LlamaBridge_native{Load,Free,Score}`).
+- The GGUF's metadata and template parse correctly under llama.cpp's own reader on the host.
+- Both test suites pass, including live parity against `laya-shim`.
+
+Not yet verified: that the rendered prompt produces sensible scores, and that the marker
+layout matches what the model was trained on. Both are only observable by running it.
+
+## Where the pieces live
+
+| Concern | File |
+|---|---|
+| Prompt rendering, truncation, marker read | `app/src/main/cpp/chuse_jni.cpp` |
+| Option ordering, temperature, softmax, confidence | `core/src/main/kotlin/com/chuse/core/` |
+| Model loading and lifecycle | `app/src/main/java/com/chuse/data/LayaRepository.kt` |
+| JNI surface | `app/src/main/java/com/chuse/inference/LlamaBridge.kt` |
+
+The engine refuses at load time anything that is not a `modern-bert` model with decision type
+`laya`, rather than loading it and returning meaningless numbers later.

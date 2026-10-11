@@ -4,6 +4,7 @@ import com.chuse.core.BooleanCriteria
 import com.chuse.core.CloseableScorer
 import com.chuse.core.DecisionResult
 import com.chuse.core.Question
+import com.chuse.core.QuestionType
 import com.chuse.core.ScoringRequest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -17,8 +18,8 @@ import org.junit.Test
  * user can actually cause.
  *
  * The scorer's contract is the seam, so these tests inject one. The real llama.cpp scorer is
- * covered by the fact that it compiles and by parity against the shim, not here — it needs a
- * model and a device.
+ * covered by the fact that it compiles, that its symbols match the Kotlin declarations, and
+ * by parity against the model's own metadata — not here, which needs a device.
  */
 class LayaRepositoryTest {
 
@@ -28,12 +29,18 @@ class LayaRepositoryTest {
     ) : CloseableScorer {
         var closed = false
             private set
-        var lastCandidates: List<String> = emptyList()
+        var lastOptions: List<String> = emptyList()
+            private set
+        var lastType: QuestionType? = null
+            private set
+        var lastTemperature = 0f
             private set
 
-        override fun score(request: ScoringRequest): FloatArray {
-            lastCandidates = request.candidates
-            return request.candidates.map { table[it] ?: unseen }.toFloatArray()
+        override fun score(request: ScoringRequest, temperature: Float): FloatArray {
+            lastOptions = request.options.map { it.key }
+            lastType = request.type
+            lastTemperature = temperature
+            return request.options.map { table[it.key] ?: unseen }.toFloatArray()
         }
 
         override fun close() {
@@ -42,11 +49,13 @@ class LayaRepositoryTest {
     }
 
     private suspend fun awaitReady(repository: LayaRepository): ModelStatus.Ready =
-        withTimeout(5_000) { repository.status.first { it !is ModelStatus.Loading } as ModelStatus.Ready }
+        withTimeout(5_000) {
+            repository.status.first { it !is ModelStatus.Loading } as ModelStatus.Ready
+        }
 
     @Test
     fun `a bundled model loads and is reported as the real scorer`() = runBlocking {
-        val scorer = FakeScorer(mapOf("true" to 5f, "false" to 0f))
+        val scorer = FakeScorer()
         val repository = LayaRepository { scorer }
 
         repository.start("/models/laya.gguf")
@@ -74,9 +83,7 @@ class LayaRepositoryTest {
 
         repository.start("/models/broken.gguf")
 
-        val status = withTimeout(5_000) {
-            repository.status.first { it !is ModelStatus.Loading }
-        }
+        val status = withTimeout(5_000) { repository.status.first { it !is ModelStatus.Loading } }
         val failure = status as ModelStatus.Failed
         assertTrue("reason was ${failure.reason}", failure.reason.contains("not a GGUF"))
         repository.close()
@@ -96,21 +103,20 @@ class LayaRepositoryTest {
     }
 
     @Test
-    fun `a yes-no question comes back with the model's probability`() = runBlocking {
-        val repository = LayaRepository { FakeScorer(mapOf("true" to 4f, "false" to 0f)) }
-        // A path, so the injected scorer is the one in use — with no model the repository
-        // deliberately answers from the stand-in instead.
+    fun `a yes-no question reaches the scorer with true before false`() = runBlocking {
+        val scorer = FakeScorer(mapOf("true" to 4f, "false" to 0f))
+        val repository = LayaRepository { scorer }
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
         val result = repository.decide(
             "The sky is blue.",
-            listOf(
-                Question.Noul("answer", "Is this true?", BooleanCriteria("true", "false")),
-            ),
-        )["answer"] as DecisionResult.Noul
+            Question.Noul("answer", "Is this true?", BooleanCriteria("true", "false")),
+        ) as DecisionResult.Noul
 
-        assertTrue("noul was ${result.noul}", result.noul > 0.9)
+        assertTrue("noul was ${result.noul}", result.noul > 0.7)
+        assertEquals(listOf("true", "false"), scorer.lastOptions)
+        assertEquals(QuestionType.Noul, scorer.lastType)
         repository.close()
     }
 
@@ -123,39 +129,55 @@ class LayaRepositoryTest {
 
         val result = repository.decide(
             "I need a new computer.",
-            listOf(
-                Question.Choice(
-                    "answer",
-                    "What do they need?",
-                    listOf(
-                        Question.Choice.Option("laptop", "A portable computer"),
-                        Question.Choice.Option("phone", "A handheld device"),
-                        Question.Choice.Option("tablet", "A large touch device"),
-                    ),
+            Question.Choice(
+                "answer",
+                "What do they need?",
+                listOf(
+                    Question.Choice.Option("laptop", "A portable computer"),
+                    Question.Choice.Option("phone", "A handheld device"),
+                    Question.Choice.Option("tablet", "A large touch device"),
                 ),
             ),
-        )["answer"] as DecisionResult.Choice
+        ) as DecisionResult.Choice
 
-        // Order matters: the scorer's array lines up positionally with the candidate list, so
-        // a reordering here would silently attach probabilities to the wrong labels.
-        assertEquals(listOf("laptop", "phone", "tablet"), scorer.lastCandidates)
+        // Order matters: the scorer's array lines up positionally with the option list, so
+        // a reordering here would silently attach scores to the wrong labels.
+        assertEquals(listOf("laptop", "phone", "tablet"), scorer.lastOptions)
+        assertEquals(QuestionType.Choice, scorer.lastType)
         assertEquals("laptop", result.choice)
         repository.close()
     }
 
     @Test
-    fun `a score question is measured against the scale the user gave`() = runBlocking {
-        val repository = LayaRepository { FakeScorer(mapOf("low" to -2f, "high" to 3f)) }
+    fun `a score question keys its options by level index`() = runBlocking {
+        val scorer = FakeScorer(mapOf("0" to -2f, "1" to 3f))
+        val repository = LayaRepository { scorer }
         repository.start("/models/laya.gguf")
         awaitReady(repository)
 
         val result = repository.decide(
             "A build failed.",
-            listOf(Question.Score("answer", "How bad?", listOf("low", "high"))),
-        )["answer"] as DecisionResult.Score
+            Question.Score("answer", "How bad?", listOf("low", "high")),
+        ) as DecisionResult.Score
 
+        assertEquals(listOf("0", "1"), scorer.lastOptions)
+        assertEquals(QuestionType.Score, scorer.lastType)
         assertEquals(listOf("low", "high"), result.legend.values.toList())
-        assertTrue("score was ${result.score}", result.score > 0.5)
+        repository.close()
+    }
+
+    @Test
+    fun `the scorer is handed the temperature the model calibrated`() = runBlocking {
+        val scorer = FakeScorer()
+        val repository = LayaRepository { scorer }
+        repository.start("/models/laya.gguf")
+        awaitReady(repository)
+
+        repository.decide(
+            "state",
+            Question.Score("answer", "Rate.", listOf("low", "high")),
+        )
+        assertEquals(1.25143f, scorer.lastTemperature, 1e-4f)
         repository.close()
     }
 
@@ -167,11 +189,11 @@ class LayaRepositoryTest {
         awaitReady(repository)
 
         val failure = runCatching {
-            repository.decide("   ", listOf(Question.Noul("answer", "Is it true?")))
+            repository.decide("   ", Question.Noul("answer", "Is it true?"))
         }.exceptionOrNull()
 
         assertTrue("expected a rejection, got $failure", failure is IllegalArgumentException)
-        assertTrue("the scorer should not have run", scorer.lastCandidates.isEmpty())
+        assertTrue("the scorer should not have run", scorer.lastOptions.isEmpty())
         repository.close()
     }
 
@@ -184,9 +206,7 @@ class LayaRepositoryTest {
         val failure = runCatching {
             repository.decide(
                 "state",
-                listOf(
-                    Question.Choice("answer", "Pick.", listOf(Question.Choice.Option("only", "One"))),
-                ),
+                Question.Choice("answer", "Pick.", listOf(Question.Choice.Option("only", "One"))),
             )
         }.exceptionOrNull()
 
@@ -197,18 +217,26 @@ class LayaRepositoryTest {
     @Test
     fun `the stand-in is stable for the same question and differs across questions`() {
         val scorer = StandInScorer()
-        val first = ScoringRequest("sys", "Is the sky blue?", listOf("true", "false"))
-        val again = ScoringRequest("sys", "Is the sky blue?", listOf("true", "false"))
-        val other = ScoringRequest("sys", "Is the sky green?", listOf("true", "false"))
-
-        val a = scorer.score(first)
-        val b = scorer.score(again)
-        val c = scorer.score(other)
+        fun ask(instructions: String) = scorer.score(
+            ScoringRequest(
+                state = "state",
+                instructions = instructions,
+                type = QuestionType.Choice,
+                options = listOf(
+                    ScoringRequest.Candidate("a", "A"),
+                    ScoringRequest.Candidate("b", "B"),
+                ),
+            ),
+            temperature = 1f,
+        )
 
         // Stability is what makes the stand-in usable for eyeballing the UI: a ranking that
         // reshuffles on every recomposition would make it look broken.
-        assertTrue(a.contentEquals(b))
-        assertTrue("stand-in gave identical scores for different questions", !a.contentEquals(c))
+        assertTrue(ask("Is the sky blue?").contentEquals(ask("Is the sky blue?")))
+        assertTrue(
+            "stand-in gave identical scores for different questions",
+            !ask("Is the sky blue?").contentEquals(ask("Is the sky green?")),
+        )
     }
 
     @Test
@@ -219,26 +247,22 @@ class LayaRepositoryTest {
 
         // Each of the three modes must produce a usable shape with no GGUF present, since a
         // build without one still has to be demoable.
-        val noul = repository.decide(
-            "state",
-            listOf(Question.Noul("a", "True?")),
-        )["a"]
+        val noul = repository.decide("state", Question.Noul("a", "True?"))
         val choice = repository.decide(
             "state",
-            listOf(
-                Question.Choice(
-                    "b", "Pick.",
-                    listOf(
-                        Question.Choice.Option("x", "X"),
-                        Question.Choice.Option("y", "Y"),
-                    ),
+            Question.Choice(
+                "b",
+                "Pick.",
+                listOf(
+                    Question.Choice.Option("x", "X"),
+                    Question.Choice.Option("y", "Y"),
                 ),
             ),
-        )["b"]
+        )
         val score = repository.decide(
             "state",
-            listOf(Question.Score("c", "How?", listOf("low", "high"))),
-        )["c"]
+            Question.Score("c", "How?", listOf("low", "high")),
+        )
 
         assertTrue(noul is DecisionResult.Noul)
         assertTrue(choice is DecisionResult.Choice)

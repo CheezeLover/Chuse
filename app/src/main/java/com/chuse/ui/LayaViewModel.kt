@@ -36,7 +36,7 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
     fun askYesNo(situation: String, question: String) = ask(
         situation,
         Question.Noul(
-            id = ANSWER_ID,
+            id = "answer",
             instructions = question,
             criteria = BooleanCriteria(yes = "true", no = "false"),
         ),
@@ -45,7 +45,7 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
     fun askChoice(situation: String, question: String, options: List<Pair<String, String>>) = ask(
         situation,
         Question.Choice(
-            id = ANSWER_ID,
+            id = "answer",
             instructions = question,
             criteria = options.map { Question.Choice.Option(it.first, it.second) },
         ),
@@ -53,7 +53,7 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
 
     fun askScore(situation: String, question: String, levels: List<String>) = ask(
         situation,
-        Question.Score(id = ANSWER_ID, instructions = question, criteria = levels),
+        Question.Score(id = "answer", instructions = question, criteria = levels),
     )
 
     fun reset() {
@@ -65,8 +65,7 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
         _askState.value = AskState.Working
         viewModelScope.launch {
             _askState.value = try {
-                val answers = repository.decide(situation, listOf(question))
-                AskState.Answered(answers.getValue(ANSWER_ID))
+                AskState.Answered(repository.decide(situation, question))
             } catch (cancellation: kotlinx.coroutines.CancellationException) {
                 throw cancellation
             } catch (failure: Exception) {
@@ -75,10 +74,5 @@ class LayaViewModel(private val repository: LayaRepository) : ViewModel() {
                 AskState.Failed(failure.message ?: failure::class.java.simpleName)
             }
         }
-    }
-
-    private companion object {
-        /** One question per screen keeps the plumbing identical across all three modes. */
-        const val ANSWER_ID = "answer"
     }
 }

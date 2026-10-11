@@ -55,13 +55,25 @@ object Math {
     /** Decimal places the shim reports. Kept identical so parity is an exact comparison. */
     const val PRECISION = 4
 
-    fun softmax(scores: FloatArray): DoubleArray {
+    /**
+ * Softmax over raw scores.
+ *
+ * @param temperature divides the scores before the exponential. Decision models calibrate
+ *   this per question type and option count; 1.0 is a plain softmax and is only correct for a
+ *   model that does not calibrate its scores.
+ */
+fun softmax(scores: FloatArray, temperature: Float = 1.0f): DoubleArray {
         require(scores.isNotEmpty()) { "cannot normalise an empty score vector" }
+        require(temperature > 0.0f && temperature.isFinite()) {
+            "temperature must be positive and finite, got $temperature"
+        }
         // Guard the subtraction below against a non-finite backend rather than letting it
         // silently produce NaN probabilities that would reach the UI as garbage.
         require(scores.all { it.isFinite() }) { "scorer returned a non-finite score" }
         val max = scores.max()
-        val exps = DoubleArray(scores.size) { kotlin.math.exp((scores[it] - max).toDouble()) }
+        val exps = DoubleArray(scores.size) {
+            kotlin.math.exp((scores[it] - max).toDouble() / temperature)
+        }
         val total = exps.sum()
         require(total > 0.0 && total.isFinite()) { "softmax overflowed to a degenerate total" }
         return DoubleArray(scores.size) { exps[it] / total }

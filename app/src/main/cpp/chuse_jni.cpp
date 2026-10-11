@@ -1,18 +1,32 @@
-// Chuse's native scoring bridge.
+// Chuse's native decision bridge for Laya (modern-bert, decision type "laya").
 //
-// Scores candidate answers against a prompt and returns raw log-probabilities, one per
-// candidate. The Kotlin side owns softmax and every derived figure; this layer only turns
-// text into numbers, so swapping the runtime cannot change how answers are reported.
+// Laya is not a language model that generates tokens. It is a classifier that answers a
+// typed question in a single encoder pass:
 //
-// Scoring is teacher forcing, not sampling: the prompt is decoded once and its KV cache
-// kept, then each candidate is scored against that cache and its own positions removed.
-// Sampling would give one arbitrary answer; ranking needs all candidates scored on the
-// same footing, which is exactly what the cache reuse buys.
+//   [CLS]{type} question: {instructions}[SEP]
+//   [MASK] option 1 [SEP] [MASK] option 2 [SEP] ...
+//   [SEP]{state}[SEP]
+//
+// Each [MASK] marks one option, and the score for that option is a single float read from
+// the embeddings output at that marker's position. Nothing is sampled and nothing is
+// generated, so this file has no KV cache management and no teacher forcing — the earlier
+// autoregressive implementation was for the wrong architecture entirely.
+//
+// The prompt shape is fixed by the GGUF's `tokenizer.chat_template.systemone`, and is
+// reimplemented here rather than run through a Jinja engine: the template is ~1.5 KB of
+// known text with no branches beyond the three question types, and embedding an interpreter
+// for it would cost far more than the few lines that render it.
+//
+// Everything the model needs at run time — max_head_tokens, the per-type temperatures, the
+// mask and separator tokens — is read from the GGUF at load, so a different Laya checkpoint
+// works without a code change.
 
 #include <jni.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -20,14 +34,26 @@
 
 namespace {
 
-// A loaded model plus its context. Held as an opaque handle so the Kotlin side only ever
-// deals in a Long and cannot accidentally free the wrong pointer.
+constexpr int32_t QUESTION_CHOICE = 0;
+constexpr int32_t QUESTION_SCORE  = 1;
+constexpr int32_t QUESTION_NOUL   = 2;
+
+/** A loaded model plus everything the decision path needs from its metadata. */
 struct ChuseContext {
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
     const llama_vocab * vocab = nullptr;
-    llama_memory_t memory = nullptr;
-    int n_vocab = 0;
+
+    llama_token token_mask = LLAMA_TOKEN_NULL;
+    llama_token token_sep = LLAMA_TOKEN_NULL;
+
+    // "modern-bert.decision.max_head_tokens"
+    size_t max_head_tokens = 0;
+    // "modern-bert.decision.temperature.<type>[.<bucket>]"
+    std::map<std::string, float> temperatures;
+
+    // The embeddings output has one column per question type.
+    int32_t column = 0;
 };
 
 void throw_java(JNIEnv * env, const std::string & message) {
@@ -37,22 +63,31 @@ void throw_java(JNIEnv * env, const std::string & message) {
     }
 }
 
-std::string jstring_to_std(JNIEnv * env, jstring value) {
-    if (value == nullptr) return {};
-    const char * chars = env->GetStringUTFChars(value, nullptr);
-    std::string result(chars == nullptr ? "" : chars);
-    if (chars != nullptr) env->ReleaseStringUTFChars(value, chars);
-    return result;
+std::string meta_str(const llama_model * model, const std::string & key) {
+    char buf[512];
+    const int32_t n = llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf));
+    return n < 0 ? std::string() : std::string(buf);
 }
 
-// Reads a UTF-8 byte array into a string.
-//
-// Strings cross the boundary as byte arrays rather than jstring on purpose:
-// GetStringUTFChars returns *modified* UTF-8, in which characters outside the BMP become
-// six-byte surrogate pairs. For CJK that is identical to standard UTF-8, but emoji and rare
-// hanzi extensions would arrive as CESU-8 and tokenise into the wrong tokens — a failure
-// that would show up as nonsense answers on exactly the input a Chinese phone is asked for.
-std::string jbyte_array_to_string(JNIEnv * env, jbyteArray array) {
+bool meta_float(const llama_model * model, const std::string & key, float & out) {
+    const std::string raw = meta_str(model, key);
+    if (raw.empty()) return false;
+    try {
+        out = std::stof(raw);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Reads a UTF-8 byte array.
+ *
+ * Strings cross the boundary as byte arrays rather than jstring because GetStringUTFChars
+ * returns *modified* UTF-8, in which anything outside the BMP becomes a six-byte surrogate
+ * pair. Identical to standard UTF-8 for CJK, but it would mis-tokenise emoji.
+ */
+std::string jbytes(JNIEnv * env, jbyteArray array) {
     if (array == nullptr) return {};
     const jsize length = env->GetArrayLength(array);
     if (length <= 0) return {};
@@ -62,110 +97,201 @@ std::string jbyte_array_to_string(JNIEnv * env, jbyteArray array) {
     return result;
 }
 
-std::vector<std::string> jobject_array_to_strings(JNIEnv * env, jobjectArray array) {
-    std::vector<std::string> result;
-    if (array == nullptr) return result;
-    const jsize count = env->GetArrayLength(array);
-    result.reserve(count);
-    for (jsize i = 0; i < count; ++i) {
-        auto element = static_cast<jbyteArray>(env->GetObjectArrayElement(array, i));
-        result.push_back(jbyte_array_to_string(env, element));
-        env->DeleteLocalRef(element);
+/**
+ * Reads two parallel string arrays. Returns true on success.
+ *
+ * Deliberately false-means-ok so the call site reads as a guard: a malformed array is a
+ * malformed request, not an empty one.
+ */
+bool read_option_arrays(
+    JNIEnv * env, jobjectArray keys, jobjectArray descriptions,
+    std::vector<std::string> * keys_out, std::vector<std::string> * descriptions_out) {
+    if (keys == nullptr || descriptions == nullptr) return false;
+    const jsize n_keys = env->GetArrayLength(keys);
+    const jsize n_descriptions = env->GetArrayLength(descriptions);
+    if (n_keys != n_descriptions) return false;
+
+    for (jsize i = 0; i < n_keys; i++) {
+        auto key = static_cast<jbyteArray>(env->GetObjectArrayElement(keys, i));
+        auto description = static_cast<jbyteArray>(env->GetObjectArrayElement(descriptions, i));
+        keys_out->push_back(jbytes(env, key));
+        descriptions_out->push_back(jbytes(env, description));
+        env->DeleteLocalRef(key);
+        env->DeleteLocalRef(description);
     }
-    return result;
+    return true;
 }
 
-// Applies the chat template baked into the GGUF, so the model is prompted the way its own
-// authors intended. Falls back to a plain concatenation when the file has no template.
-std::string build_prompt(ChuseContext * handle, const std::string & system, const std::string & user) {
-    std::vector<llama_chat_message> messages;
-    // Explicitly constructed rather than brace-initialised: llama_chat_message is a C struct
-    // of two pointers, and a braced list against it is ambiguous.
-    messages.push_back(llama_chat_message{"system", system.c_str()});
-    messages.push_back(llama_chat_message{"user", user.c_str()});
+// ---------------------------------------------------------------------------
+// Prompt construction
+// ---------------------------------------------------------------------------
 
-    const char * tmpl = llama_model_chat_template(handle->model, nullptr);
-    if (tmpl == nullptr || tmpl[0] == '\0') {
-        return "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + user +
-               "<|im_end|>\n<|im_start|>assistant\n";
-    }
+std::string or_empty(const std::string & value) { return value.empty() ? std::string() : value; }
 
-    // Generous first guess, then grow once if the template needed more room.
-    std::vector<char> buffer(2 * (system.size() + user.size() + 256));
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        const int32_t written =
-            llama_chat_apply_template(tmpl, messages.data(), messages.size(), true,
-                                      buffer.data(), static_cast<int32_t>(buffer.size()));
-        if (written > 0 && static_cast<size_t>(written) < buffer.size()) {
-            return std::string(buffer.data(), static_cast<size_t>(written));
+/**
+ * Renders the systemone template for one question.
+ *
+ * Mirrors `tokenizer.chat_template.systemone` from the GGUF:
+ *
+ *   [CLS]{type} question: {instructions}[SEP]
+ *   {% for o in options %}[MASK] {per-type option text}[SEP]{% endfor %}
+ *   {state}[SEP]
+ *
+ * The per-type option text is where the three question types differ:
+ *   choice -> "key: description"
+ *   score  -> "level {index}: {label}"
+ *   noul   -> "true: yes, the statement holds" when no description is given
+ */
+std::string render_prompt(
+    const ChuseContext * handle,
+    int32_t question_type,
+    const std::string & instructions,
+    const std::string & state,
+    const std::vector<std::string> & option_keys,
+    const std::vector<std::string> & option_descriptions) {
+
+    const char * type_name = question_type == QUESTION_CHOICE ? "choice"
+                             : question_type == QUESTION_SCORE ? "score"
+                                                              : "noul";
+
+    std::string prompt = "[CLS]";
+    prompt += type_name;
+    prompt += " question: ";
+    prompt += instructions;
+    prompt += "[SEP]";
+
+    for (size_t i = 0; i < option_keys.size(); i++) {
+        prompt += "[MASK] ";
+        if (question_type == QUESTION_SCORE) {
+            // The scale index is the key here, which is why score levels must be keyed by
+            // their position rather than by a user-supplied label.
+            prompt += "level ";
+            prompt += option_keys[i];
+            prompt += ": ";
+            prompt += option_descriptions[i];
+        } else {
+            prompt += option_keys[i];
+            prompt += ": ";
+            if (!option_descriptions[i].empty()) {
+                prompt += option_descriptions[i];
+            } else if (option_keys[i] == "true") {
+                prompt += "yes, the statement holds";
+            } else {
+                prompt += "no, the statement does not hold";
+            }
         }
-        buffer.resize(buffer.size() * 2);
+        prompt += "[SEP]";
     }
-    return {};
+
+    prompt += state;
+    prompt += "[SEP]";
+    return prompt;
 }
 
-bool tokenize(ChuseContext * handle, const std::string & text, bool add_special,
-              std::vector<llama_token> & out) {
-    const int32_t upper_bound =
-        llama_tokenize(handle->vocab, text.data(), static_cast<int32_t>(text.size()), nullptr, 0,
-                       add_special, true);
-    if (upper_bound < 0) return false;
-
-    out.resize(upper_bound);
+bool tokenize(ChuseContext * handle, const std::string & text, std::vector<llama_token> & out) {
+    const int32_t upper = llama_tokenize(handle->vocab, text.data(), static_cast<int32_t>(text.size()),
+                                         nullptr, 0, false, true);
+    if (upper < 0) return false;
+    out.resize(upper);
     const int32_t written = llama_tokenize(handle->vocab, text.data(),
-                                           static_cast<int32_t>(text.size()), out.data(),
-                                           upper_bound, add_special, true);
+                                           static_cast<int32_t>(text.size()), out.data(), upper,
+                                           false, true);
     if (written < 0) return false;
     out.resize(written);
     return true;
 }
 
-// log softmax of one position, read for a single token. Doing the reduction over the whole
-// vocabulary each time is what turns logits into a comparable log-probability.
-//
-// Wrapped because llama_get_logits_ith throws on an out-of-range index, and an exception
-// unwinding through a JNI frame is undefined behaviour rather than a Kotlin exception.
-float log_softmax_at(llama_context * ctx, int32_t batch_index, llama_token token, int n_vocab) {
-    float * logits = nullptr;
-    try {
-        logits = llama_get_logits_ith(ctx, batch_index);
-    } catch (...) {
-        return 0.0f;
-    }
-    if (logits == nullptr) return 0.0f;
+/**
+ * Trims the prompt to the layout the model was trained on and records where each option's
+ * marker ended up.
+ *
+ * The question and the options share a fixed budget (`max_head_tokens`), so an option list
+ * that is too long shrinks every option evenly rather than truncating the last one. Mirrors
+ * `fill_task_laya` in llama.cpp's server-decision.cpp.
+ */
+bool layout_prompt(
+    ChuseContext * handle,
+    std::vector<llama_token> & tokens,
+    size_t n_options,
+    std::vector<size_t> & markers_out) {
 
-    float max_logit = logits[0];
-    for (int i = 1; i < n_vocab; ++i) {
-        if (logits[i] > max_logit) max_logit = logits[i];
+    std::vector<size_t> markers;
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (tokens[i] == handle->token_mask) markers.push_back(i);
+    }
+    // Every option must contribute exactly one marker, the head must be preceded by a
+    // separator, and the prompt must end in one — otherwise the positions mean nothing.
+    if (markers.size() != n_options || markers[0] < 2 ||
+        tokens[markers[0] - 1] != handle->token_sep || tokens.back() != handle->token_sep) {
+        return false;
     }
 
-    double sum = 0.0;
-    for (int i = 0; i < n_vocab; ++i) {
-        sum += std::exp(static_cast<double>(logits[i]) - max_logit);
+    const size_t head_end = markers[0] - 1;
+    const size_t opts_end = static_cast<size_t>(
+        std::find(tokens.begin() + static_cast<long>(markers.back()), tokens.end(),
+                  handle->token_sep) -
+        tokens.begin());
+    if (opts_end + 1 >= tokens.size()) return false;
+
+    // Split into marker + option text, then cap each option at 49 tokens (48 of text plus
+    // its marker).
+    std::vector<std::vector<llama_token>> options;
+    size_t n_options_tokens = 0;
+    auto set_max = [&](size_t n_max) {
+        n_options_tokens = 0;
+        for (auto & opt : options) {
+            if (opt.size() > n_max) opt.resize(n_max);
+            n_options_tokens += opt.size();
+        }
+    };
+    for (size_t i = 0; i < n_options; i++) {
+        const size_t end = i + 1 < n_options ? markers[i + 1] : opts_end;
+        options.emplace_back(tokens.begin() + static_cast<long>(markers[i]),
+                             tokens.begin() + static_cast<long>(end));
     }
-    const double log_denominator = std::log(sum);
-    return static_cast<float>(static_cast<double>(logits[token]) - max_logit - log_denominator);
+    set_max(49);
+    if (n_options_tokens + 16 > handle->max_head_tokens) {
+        // Too many or too long options: shrink them evenly rather than dropping any.
+        set_max(std::max<size_t>(4,
+                                 (handle->max_head_tokens -
+                                  std::min(handle->max_head_tokens, static_cast<size_t>(16))) /
+                                     n_options));
+    }
+    const size_t n_question_max =
+        std::max<size_t>(8, handle->max_head_tokens - std::min(handle->max_head_tokens, n_options_tokens));
+
+    std::vector<llama_token> out;
+    out.push_back(tokens[0]);
+    out.insert(out.end(), tokens.begin() + 1,
+               tokens.begin() + static_cast<long>(std::min(head_end, 1 + n_question_max)));
+    out.push_back(handle->token_sep);
+    markers_out.clear();
+    for (const auto & opt : options) {
+        markers_out.push_back(out.size());
+        out.insert(out.end(), opt.begin(), opt.end());
+    }
+    out.insert(out.end(), tokens.begin() + static_cast<long>(opts_end), tokens.end());
+    tokens = std::move(out);
+    return true;
 }
 
-// A batch with explicit positions and per-token logits.
-//
-// llama_batch_get_one cannot be used here: it leaves `pos` null, which the allocator fills
-// from `i + p0` with p0 = 0, and it leaves `logits` null, which the allocator resolves to
-// the final token only. Scoring a candidate needs every token's logits at their real
-// positions — continuing from the cached prompt — so both are built explicitly here.
-llama_batch make_batch(const std::vector<llama_token> & tokens, llama_pos first_pos) {
-    const int32_t count = static_cast<int32_t>(tokens.size());
-    llama_batch batch = llama_batch_init(count, 0, 1);
-    batch.n_tokens = count;
-    for (int32_t i = 0; i < count; ++i) {
-        batch.token[i] = tokens[i];
-        batch.pos[i] = first_pos + i;
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[0][i] = 0;
-        // Every token needs its logits: each one predicts the next token of the candidate.
-        batch.logits[i] = 1;
+/**
+ * The temperature for this question, which depends on both the type and how many options
+ * there are. Looked up as `<type>.<bucket>` then `<type>`, matching the GGUF keys.
+ */
+float temperature_for(const ChuseContext * handle, int32_t question_type, size_t n_options) {
+    const char * type_name = question_type == QUESTION_CHOICE ? "choice"
+                             : question_type == QUESTION_SCORE ? "score"
+                                                              : "noul";
+    std::string bucket = n_options <= 2 ? "2"
+                          : n_options <= 5 ? "3_5"
+                          : n_options <= 10 ? "6_10"
+                                           : "11";
+    for (const std::string & name : {std::string(type_name) + "." + bucket, std::string(type_name)}) {
+        const auto it = handle->temperatures.find(name);
+        if (it != handle->temperatures.end()) return it->second;
     }
-    return batch;
+    return 1.0f;
 }
 
 }  // namespace
@@ -173,9 +299,9 @@ llama_batch make_batch(const std::vector<llama_token> & tokens, llama_pos first_
 extern "C" {
 
 JNIEXPORT jlong JNICALL Java_com_chuse_inference_LlamaBridge_nativeLoad(JNIEnv * env, jclass,
-                                                                        jstring path) {
-    const std::string model_path = jstring_to_std(env, path);
-    if (model_path.empty()) {
+                                                                        jbyteArray jpath) {
+    const std::string path = jbytes(env, jpath);
+    if (path.empty()) {
         throw_java(env, "model path was empty");
         return 0;
     }
@@ -183,40 +309,104 @@ JNIEXPORT jlong JNICALL Java_com_chuse_inference_LlamaBridge_nativeLoad(JNIEnv *
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = 0;              // CPU only for now; a Vulkan build can raise this.
-    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;  // Page the weights in rather than reading
-                                                     // them into the heap. Renamed from the old
-                                                     // `use_mmap` bool in v0.6.0.
+    model_params.n_gpu_layers = 0;
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
 
-    llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(path.c_str(), model_params);
     if (model == nullptr) {
-        throw_java(env, "could not load model from " + model_path);
-        return 0;
-    }
-
-    llama_context_params context_params = llama_context_default_params();
-    context_params.n_ctx = 2048;
-    context_params.n_batch = 512;
-    context_params.n_threads = 4;
-    context_params.n_threads_batch = 4;
-
-    llama_context * ctx = llama_init_from_model(model, context_params);
-    if (ctx == nullptr) {
-        llama_model_free(model);
-        throw_java(env, "could not create an inference context");
+        throw_java(env, "could not load model from " + path);
         return 0;
     }
 
     auto * handle = new ChuseContext();
     handle->model = model;
-    handle->ctx = ctx;
     handle->vocab = llama_model_get_vocab(model);
-    handle->memory = llama_get_memory(ctx);
-    handle->n_vocab = llama_vocab_n_tokens(handle->vocab);
+
+    // Refuse a model this bridge cannot actually answer questions with, rather than
+    // loading it and producing meaningless numbers later.
+    const std::string arch = meta_str(model, "general.architecture");
+    if (arch != "modern-bert") {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "expected a modern-bert model, got '" + arch + "'");
+        return 0;
+    }
+    const std::string decision_type = meta_str(model, arch + ".decision.type");
+    if (decision_type != "laya") {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "expected decision type 'laya', got '" + decision_type + "'");
+        return 0;
+    }
+
+    handle->token_mask = llama_vocab_mask(handle->vocab);
+    handle->token_sep = llama_vocab_sep(handle->vocab);
+    if (handle->token_mask == LLAMA_TOKEN_NULL || handle->token_sep == LLAMA_TOKEN_NULL) {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "decision model has no mask or sep token");
+        return 0;
+    }
+
+    float head_tokens = 0.0f;
+    if (!meta_float(model, arch + ".decision.max_head_tokens", head_tokens) || head_tokens <= 0.0f) {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "decision model has no valid max_head_tokens");
+        return 0;
+    }
+    handle->max_head_tokens = static_cast<size_t>(head_tokens);
+
+    const std::string temp_prefix = arch + ".decision.temperature.";
+    for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
+        char key[512];
+        char val[64];
+        if (llama_model_meta_key_by_index(model, i, key, sizeof(key)) < 0) continue;
+        if (llama_model_meta_val_str_by_index(model, i, val, sizeof(val)) < 0) continue;
+        const std::string k(key);
+        if (k.rfind(temp_prefix, 0) != 0) continue;
+        float t = 0.0f;
+        if (!meta_float(model, k, t) || t <= 0.0f) {
+            llama_model_free(model);
+            delete handle;
+            throw_java(env, "invalid decision temperature: " + k);
+            return 0;
+        }
+        handle->temperatures[k.substr(temp_prefix.size())] = t;
+    }
+    if (handle->temperatures.empty()) {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "decision model has no temperatures");
+        return 0;
+    }
+
+    // One encoder pass over the whole prompt; the scores come out of the embeddings.
+    llama_context_params context_params = llama_context_default_params();
+    context_params.n_ctx = 2048;
+    context_params.n_batch = 512;
+    context_params.n_threads = 4;
+    context_params.n_threads_batch = 4;
+    // Not decoding tokens, so there is nothing to sample and no cache to grow.
+    context_params.embeddings = true;
+    context_params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+
+    llama_context * ctx = llama_init_from_model(model, context_params);
+    if (ctx == nullptr) {
+        llama_model_free(model);
+        delete handle;
+        throw_java(env, "could not create an inference context");
+        return 0;
+    }
+    handle->ctx = ctx;
+    // Scores are read from one column of the embeddings, so more than one output column is
+    // a sign the model is not what this bridge expects.
+    handle->column = 0;
     return reinterpret_cast<jlong>(handle);
 }
 
-JNIEXPORT void JNICALL Java_com_chuse_inference_LlamaBridge_nativeFree(JNIEnv *, jclass, jlong handle_value) {
+JNIEXPORT void JNICALL Java_com_chuse_inference_LlamaBridge_nativeFree(JNIEnv *, jclass,
+                                                                      jlong handle_value) {
     auto * handle = reinterpret_cast<ChuseContext *>(handle_value);
     if (handle == nullptr) return;
     if (handle->ctx != nullptr) llama_free(handle->ctx);
@@ -225,95 +415,86 @@ JNIEXPORT void JNICALL Java_com_chuse_inference_LlamaBridge_nativeFree(JNIEnv *,
 }
 
 JNIEXPORT jfloatArray JNICALL Java_com_chuse_inference_LlamaBridge_nativeScore(
-    JNIEnv * env, jclass, jlong handle_value, jbyteArray jsystem, jbyteArray juser,
-    jobjectArray jcandidates) {
+    JNIEnv * env, jclass, jlong handle_value, jint question_type, jbyteArray jinstructions,
+    jbyteArray jstate, jobjectArray jkeys, jobjectArray jdescriptions) {
+
     auto * handle = reinterpret_cast<ChuseContext *>(handle_value);
     if (handle == nullptr) {
         throw_java(env, "model is not loaded");
         return nullptr;
     }
-
-    const std::vector<std::string> candidates = jobject_array_to_strings(env, jcandidates);
-    const std::string prompt = build_prompt(handle, jbyte_array_to_string(env, jsystem),
-                                            jbyte_array_to_string(env, juser));
-    if (prompt.empty()) {
-        throw_java(env, "could not build a prompt from the given messages");
+    if (question_type != QUESTION_CHOICE && question_type != QUESTION_SCORE &&
+        question_type != QUESTION_NOUL) {
+        throw_java(env, "unknown question type");
         return nullptr;
     }
 
-    std::vector<llama_token> prompt_tokens;
-    if (!tokenize(handle, prompt, true, prompt_tokens) || prompt_tokens.empty()) {
-        throw_java(env, "could not tokenize the prompt");
+    std::vector<std::string> keys;
+    std::vector<std::string> descriptions;
+    if (!read_option_arrays(env, jkeys, jdescriptions, &keys, &descriptions)) {
+        throw_java(env, "could not read the options");
+        return nullptr;
+    }
+    if (keys.size() < 2 || keys.size() != descriptions.size()) {
+        throw_java(env, "a decision needs at least two options");
         return nullptr;
     }
 
-    // Decode the shared prefix once. Everything below reuses this cache.
-    llama_batch prompt_batch = make_batch(prompt_tokens, 0);
-    if (llama_decode(handle->ctx, prompt_batch) != 0) {
-        llama_batch_free(prompt_batch);
-        throw_java(env, "the model failed while reading the prompt");
+    const std::string instructions = jbytes(env, jinstructions);
+    const std::string state = jbytes(env, jstate);
+    if (instructions.empty() || state.empty()) {
+        throw_java(env, "a decision needs both an instruction and a state");
         return nullptr;
     }
-    llama_batch_free(prompt_batch);
 
-    const int32_t prompt_length = static_cast<int32_t>(prompt_tokens.size());
+    const std::string prompt =
+        render_prompt(handle, question_type, instructions, state, keys, descriptions);
+
+    std::vector<llama_token> tokens;
+    if (!tokenize(handle, prompt, tokens) || tokens.empty()) {
+        throw_java(env, "could not tokenize the decision prompt");
+        return nullptr;
+    }
+
+    std::vector<size_t> markers;
+    if (!layout_prompt(handle, tokens, keys.size(), markers)) {
+        throw_java(env, "the decision prompt did not have the expected layout");
+        return nullptr;
+    }
+
+    // One forward pass over the whole prompt, with every marker position marked as an
+    // output so its embeddings are retained.
+    llama_batch batch = llama_batch_init(static_cast<int32_t>(tokens.size()), 0, 1);
+    batch.n_tokens = static_cast<int32_t>(tokens.size());
+    for (size_t i = 0; i < tokens.size(); i++) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = static_cast<llama_pos>(i);
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[0][i] = 0;
+        batch.logits[i] = 0;
+    }
+    for (const size_t marker : markers) {
+        batch.logits[marker] = 1;
+    }
+
+    const int32_t rc = llama_decode(handle->ctx, batch);
+    llama_batch_free(batch);
+    if (rc != 0) {
+        throw_java(env, "the model failed to evaluate the decision");
+        return nullptr;
+    }
+
+    // One float per option, read from the embeddings at that option's marker.
     std::vector<float> scores;
-    scores.reserve(candidates.size());
-
-    for (const std::string & candidate : candidates) {
-        // Tokenising prompt+candidate and keeping the tail, rather than tokenising the
-        // candidate alone, is what makes a leading space land the same way it would mid
-        // sentence. Tokenising it standalone is a classic off-by-one-word source of garbage
-        // rankings.
-        std::vector<llama_token> candidate_tokens;
-        float total = 0.0f;
-        if (!candidate.empty()) {
-            std::vector<llama_token> full;
-            if (!tokenize(handle, prompt + candidate, true, full) ||
-                full.size() <= static_cast<size_t>(prompt_length)) {
-                throw_java(env, "could not tokenize candidate '" + candidate + "'");
-                return nullptr;
-            }
-            candidate_tokens.assign(full.begin() + prompt_length, full.end());
+    scores.reserve(keys.size());
+    for (const size_t marker : markers) {
+        const float * embd = llama_get_embeddings_ith(handle->ctx, static_cast<int32_t>(marker));
+        if (embd == nullptr) {
+            throw_java(env, "could not read the decision scores");
+            return nullptr;
         }
-
-        if (candidate_tokens.empty()) {
-            // An empty candidate is legal input but scores as log(1): never the winner.
-            scores.push_back(0.0f);
-            continue;
-        }
-
-        // The first candidate token is predicted by the prompt's own last position, whose
-        // logits are already in the cache.
-        total += log_softmax_at(handle->ctx, prompt_length - 1, candidate_tokens[0],
-                                handle->n_vocab);
-
-        if (candidate_tokens.size() > 1) {
-            std::vector<llama_token> tail(candidate_tokens.begin() + 1, candidate_tokens.end());
-            // Positions continue from the end of the cached prompt, which is what keeps this
-            // token continuing that sequence rather than overwriting positions 0..m-2 of it.
-            llama_batch tail_batch = make_batch(tail, prompt_length);
-            if (llama_decode(handle->ctx, tail_batch) != 0) {
-                llama_batch_free(tail_batch);
-                throw_java(env, "the model failed while scoring candidate '" + candidate + "'");
-                return nullptr;
-            }
-            // Batch index i predicts candidate_tokens[i + 1].
-            for (size_t i = 0; i + 1 < candidate_tokens.size(); ++i) {
-                total += log_softmax_at(handle->ctx, static_cast<int32_t>(i), candidate_tokens[i + 1],
-                                        handle->n_vocab);
-            }
-            llama_batch_free(tail_batch);
-            // Drop only this candidate's positions; the prompt cache stays warm for the next.
-            // Renamed from llama_kv_cache_seq_rm in v0.6.0, which made the memory type explicit.
-            llama_memory_seq_rm(handle->memory, 0, prompt_length, -1);
-        }
-
-        scores.push_back(total);
+        scores.push_back(embd[handle->column]);
     }
-
-    // The prompt occupies the cache between calls; clear it so the next request starts clean.
-    llama_memory_seq_rm(handle->memory, 0, -1, -1);
 
     jfloatArray result = env->NewFloatArray(static_cast<jsize>(scores.size()));
     if (result == nullptr) return nullptr;
