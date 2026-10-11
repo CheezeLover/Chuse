@@ -68,19 +68,69 @@ object Math {
     }
 
     /**
-     * One minus normalised entropy: 1.0 when the model is certain, near 0.0 when the
-     * distribution is flat. Matches the shim exactly on every probe taken.
+ * The probability of the most likely outcome.
+ *
+ * This has no llama.cpp equivalent — it is a `laya-shim` concept. For a two-way question
+ * it coincides with the TypeSafe confidence, but that is arithmetic, not a shared
+ * definition. The UI labels the two separately for the same reason.
+ */
+fun answerConfidence(probabilities: List<Double>): Double =
+        round(probabilities.max())
+
+/**
+ * Confidence, as published by TypeSafe and implemented by llama.cpp.
+ *
+ * These are *not* the shim's confidence, which is one minus normalised entropy. For a
+ * 0.977 / 0.023 split the TypeSafe formula gives 0.954 and entropy gives 0.842 — two
+ * different quantities that share a field name, so they must not be conflated.
+ *
+ * @param probabilities the distribution over options, in scale order.
+ */
+fun typesafeChoiceConfidence(probabilities: List<Double>): Double {
+        require(probabilities.size >= 2) { "confidence needs at least two outcomes" }
+        val n = probabilities.size.toDouble()
+        val uniform = 1.0 / n
+        val pMax = probabilities.max()
+        // A uniform distribution has no winner, which makes this 0 by construction; the
+        // guard is only there because 1 - uniform is never exactly 0 for finite n.
+        if (uniform >= 1.0) return 1.0
+        return round(maxOf(0.0, (pMax - uniform) / (1.0 - uniform)))
+    }
+
+    /**
+     * Confidence for an ordered scale, per TypeSafe.
+     *
+     * Mean distance from the modal level, relative to the mean distance of a uniform
+     * distribution around the centre of the scale. An even spread across the whole scale
+     * scores 0; a spike at any level scores near 1.
      */
-    fun confidence(probabilities: List<Double>): Double {
+    fun typesafeScoreConfidence(probabilities: List<Double>): Double {
+        require(probabilities.size >= 2) { "confidence needs at least two outcomes" }
+        val n = probabilities.size
+        val mode = probabilities.indices.maxByOrNull { probabilities[it] }!!
+        var distance = 0.0
+        var uniformDistance = 0.0
+        for (i in 0 until n) {
+            distance += probabilities[i] * kotlin.math.abs(i - mode.toDouble())
+            uniformDistance += kotlin.math.abs(i - (n - 1) / 2.0) / n
+        }
+        if (uniformDistance <= 0.0) return 1.0
+        return round(maxOf(0.0, 1.0 - distance / uniformDistance))
+    }
+
+    /**
+     * One minus normalised entropy.
+     *
+     * This is what `laya-shim` reports as `confidence`; llama.cpp does not use it. It is
+     * kept because the shim remains the reference the parity tests check against, and
+     * because the two disagree in a way worth being able to demonstrate.
+     */
+    fun normalisedEntropyConfidence(probabilities: List<Double>): Double {
         require(probabilities.size >= 2) { "confidence needs at least two outcomes" }
         val entropy = probabilities.sumOf { if (it > 0.0) -it * kotlin.math.ln(it) else 0.0 }
         val maxEntropy = kotlin.math.ln(probabilities.size.toDouble())
         return round(1.0 - entropy / maxEntropy)
     }
-
-    /** The probability of the most likely outcome, per type. */
-    fun answerConfidence(probabilities: List<Double>): Double =
-        round(probabilities.max())
 
     /** Expected level over an ordered scale. The scale is lowest-first, so index is the level. */
     fun expectedLevel(probabilities: List<Double>): Double =

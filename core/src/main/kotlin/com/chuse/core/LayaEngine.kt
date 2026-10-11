@@ -44,10 +44,11 @@ class LayaEngine(
         val yes = probabilities[0]
         return DecisionResult.Noul(
             noul = Math.round(yes),
-            // For a two-way question the normalised entropy of the distribution is already
-            // max(p, 1 - p), so confidence and answerConfidence agree. Stated explicitly
-            // rather than derived so the two are not silently conflated if that ever changes.
-            confidence = Math.answerConfidence(probabilities.toList()),
+            // For a two-way question both readings collapse to max(p, 1-p): the TypeSafe
+            // formula's uniform denominator is 0.5, and entropy over two outcomes is the
+            // same quantity. Stated rather than derived so the two are not silently
+            // conflated if either ever changes.
+            confidence = Math.typesafeChoiceConfidence(probabilities.toList()),
             answerConfidence = Math.answerConfidence(probabilities.toList()),
         )
     }
@@ -71,7 +72,7 @@ class LayaEngine(
         return DecisionResult.Choice(
             choice = winner.label,
             probabilities = distribution,
-            confidence = Math.confidence(probabilities.toList()),
+            confidence = Math.typesafeChoiceConfidence(probabilities.toList()),
             answerConfidence = Math.answerConfidence(probabilities.toList()),
         )
     }
@@ -87,7 +88,7 @@ class LayaEngine(
             score = Math.expectedLevel(probabilities.toList()),
             legend = question.criteria.withIndex().associate { (index, label) -> index to label },
             probabilities = byIndex,
-            confidence = Math.confidence(probabilities.toList()),
+            confidence = Math.typesafeScoreConfidence(probabilities.toList()),
             answerConfidence = Math.answerConfidence(probabilities.toList()),
         )
     }

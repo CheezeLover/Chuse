@@ -23,6 +23,11 @@ import kotlin.math.abs
  *    Feeding the shim's own probabilities back through `Math` proves the derived fields
  *    were reverse-engineered correctly. If `confidence` were the top probability rather
  *    than one minus normalised entropy, this fails on the very first fixture.
+ *
+ *    Note this checks the *shim's* definition of confidence. llama.cpp, which is what
+ *    actually runs on the phone, uses the TypeSafe formula instead — see
+ *    `Math.typesafeChoiceConfidence`. Both are implemented and both are tested, because
+ *    they disagree and conflating them would hide that.
  *  - **Live (opt-in).** `-Dchuse.shim=http://192.168.3.129:8081` re-asks the service and
  *    checks the recorded answers still hold, so upstream drift is visible. Skipped when
  *    the service is unreachable: the app never depends on it.
@@ -49,7 +54,7 @@ class ParityTest {
                 assertEquals(
                     "$id in ${fixture.name}: confidence",
                     answer.confidence,
-                    Math.confidence(probabilities),
+                    Math.normalisedEntropyConfidence(probabilities),
                     FIXTURE_TOLERANCE,
                 )
                 assertEquals(
