@@ -10,6 +10,11 @@ captures/
 .cxx
 *.aab
 
+# Release APKs are ~444 MB, almost all of it the 429 MB GGUF, and GitHub rejects any file
+# over 100 MB. They are build artefacts, not source: scripts/sign-test-apk.sh produces one
+# from a checkout in a few minutes. Track them with a release, not with a commit.
+*.apk
+
 # Pinned by tag and checksum in scripts/fetch-llama.sh — run that instead of committing it.
 app/src/main/cpp/third_party/llama.cpp/
 
