@@ -21,8 +21,10 @@ Each probe answers one question the others cannot:
 | `noul_bias_probe` | Is there a real yes/no bias, and does wording move it? |
 | `noul_order_probe` | Are the two yes/no columns swapped? (They are not.) |
 | `noul_wording_probe` | How much does the option wording matter? |
+| `noul_label_probe` | Does the option *label* decide the answer, as upstream issue #156 reports? (No.) |
 | `offset_probe` | Which value of the embeddings row carries the score? |
 | `signal_probe` | Do state and instructions actually move the scores? |
+| `derived_state_real_probe` | Does the derived situation help when the app really uses it? (No.) |
 
 `offset_probe` reported byte-identical embeddings for different questions, which `signal_probe`
 then showed was an artefact of that probe. Both are kept: the first is what raised the question
@@ -101,6 +103,111 @@ and nothing does (`state_fallback_probe`):
 Repeating the question is the *worst* option, which is the informative result: the model wants
 facts, not a reformulated question. The state is therefore optional in the interface but not
 substitutable, and an answer given without one carries a note saying what that costs.
+
+## The derived situation makes it worse, not better
+
+`QuestionToStatement.derive` fills an empty situation from the question, and
+`derived_state_probe` measured it at 16/20 against 12/20 empty. **That number is real and it
+reproduces — but it is not measuring the rule.** The probe now runs `derive()` for real
+(a port of the Kotlin rules lives in the probe) and prints it beside what was scored:
+
+| Question | Rule actually writes | The test table says it writes | Scored with |
+|---|---|---|---|
+| "Is water wet?" (answer false) | `Water is wet.` | `Water is dry.` | `Water is dry.` |
+| "Is the meeting at 3pm?" (false) | `The meeting is at 3pm.` | `The meeting is at 4pm.` | `The meeting is at 4pm.` |
+| "Can a phone run a model offline?" (false) | *(declined)* | `A phone cannot run a model offline.` | `A phone cannot run…` |
+| "Is the Earth flat?" (false) | `The Earth is flat.` | `The Earth is flat.` | `The Earth is flat.` |
+
+On **eight of the ten false cases** the table supplies a hand-written statement that is the
+answer — `Water is dry` for a question whose rule output is `Water is wet` — and the model is
+scored against that. Only two false cases carry the rule's own output, and those are the two
+that assert the falsehood. The 16/20 is therefore ten true cases answered by the rule plus
+roughly six false cases answered by a correct answer written into the test, which the rule has
+no way to produce. `derived_state_real_probe` measures the rule as the app uses it, and gets
+10/20 against 14/20 for an empty field.
+
+`derived_state_real_probe` measures it as the app really sends it, on twenty questions with
+determinate answers, ten true and ten false:
+
+| Situation | Correct | P(true) when true | P(true) when false | Gap |
+|---|---:|---:|---:|---:|
+| Left empty | **14/20** | 0.580 | 0.319 | +0.260 |
+| Derived from the question | 10/20 | 0.807 | **0.748** | +0.059 |
+| Neutral filler, asserts nothing | 11/20 | 0.674 | 0.627 | **+0.048** |
+| A situation stating the fact | 19/20 | 0.811 | 0.164 | +0.647 |
+
+The derived row scores exactly the ten true cases and none of the ten false ones, because on
+every false case it writes down the falsehood and the model — which takes its signal from the
+situation, as the table above already shows — believes it:
+
+| Question | Answer | Empty | Derived |
+|---|---|---:|---:|
+| "Is the Earth flat?" | false | 0.44 | **0.79** |
+| "Is two plus two equal to five?" | false | 0.34 | **0.84** |
+| "Is the Sun a planet?" | false | 0.18 | **0.68** |
+
+So the rule trades a lean towards false for a harder lean towards true. It does not recover
+the missing fact, because the missing fact is the world, and the only thing available to
+synthesise from is the question — which carries the polarity the answer is being asked about.
+There is no derivation that helps here. An empty situation at 14/20 is both more accurate and
+more honestly calibrated than a derived one.
+
+### A second model does not fix this either
+
+The obvious next proposal is to use a small language model to write the situation instead of a
+rule. It has two possible behaviours and both are measured above.
+
+Write the natural continuation and it is the rule again — "Is the Earth flat?" becomes "The
+Earth is flat." — for 10/20 and a lean towards true. Instructed not to assert anything and it
+produces a topical sentence: "The shape of the Earth." That is the **worse** of the two, at
+11/20 with a gap of **+0.048**, the smallest separation in the table. A situation with no fact
+in it is worse than no situation, because the model now reads a state and expects to conclude
+from it; it drifts to the affirmative (0.63 against 0.67) instead of answering from the weak
+signal the bare question gave (0.32 against 0.58).
+
+The only way a second model scores well is by writing down the fact, and that is the last row:
+19/20. That number is the filler's world knowledge passing through Laya, not Laya deciding. The
+app would be a chatbot narrating an answer it did not reach, and it would do so strictly worse
+than asking that model directly.
+
+(The 14/20 and the 12/20 above are different case sets: this one is built from questions whose
+answer is a determinate fact, so the model's natural lean towards false happens to pay off on
+the ten questions phrased as falsehoods. The gap columns are the comparable part.)
+
+### The option labels are not the problem either
+
+Upstream [issue #156](https://github.com/NandhaKishorM/laya/issues/156) measured that a `noul`
+whose options are labelled with boolean words — `true:`/`false:`, `yes:`/`no:` — answers with
+the **negative** label in both polarities at confidence 1.0000, and that neutral labels
+(`A`/`B`, `positive`/`negative`) fix it. That is the most plausible story for a lean towards
+false, so it was worth testing here. `noul_label_probe` varies the label and holds everything
+else fixed.
+
+Every earlier probe missed it for a structural reason: `noul_bias_probe` and
+`noul_wording_probe` both pass the keys `{"true","false"}` and vary only the *descriptions*,
+so even their "bare keys" variant renders `true: true` / `false: false`. The boolean word sits
+in the label slot in every variant they ran. The label slot had never been varied.
+
+It does not reproduce. On twenty-four judgement questions — the shape the app ships, ten true
+and ten false — the current labelling is the best of the eight variants tried:
+
+| Option labels | Correct | P(true) when true | P(true) when false | Gap |
+|---|---:|---:|---:|---:|
+| `true`/`false`, no description (current) | **20/24** | 0.52 | 0.20 | +0.32 |
+| `A`/`B` + `yes`/`no` | 19/24 | 0.63 | 0.24 | +0.39 |
+| `A`/`B`, no description | 16/24 | | | +0.08 |
+| `positive`/`negative` | 11/24 | | | −0.13 |
+| `1`/`2`, no description | 12/24 | | | +0.03 |
+
+A first pass over six review-sentiment cases showed the opposite — 4/6 with boolean labels,
+6/6 with neutral ones — and it was wrong. Six cases is inside the noise; the same variants on
+twenty-four reverse. The lesson matches `offset_probe` above: on this model a small clean-looking
+result is the thing most likely to be an artefact.
+
+What survives is the original finding. The lean is not in the labels and not in the wording. It
+is what an under-specified question looks like: with a situation the model separates cleanly
+(gap +0.48 factual, +0.32 judgement), and without one every probability sits near a coin flip,
+slightly below it.
 
 ### What remains weak
 

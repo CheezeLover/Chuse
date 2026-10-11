@@ -48,11 +48,17 @@ else()
     add_executable(noul_bias_probe tools/noul_bias_probe.cpp)
     target_link_libraries(noul_bias_probe PRIVATE chuse_decision)
 
+    add_executable(noul_label_probe tools/noul_label_probe.cpp)
+    target_link_libraries(noul_label_probe PRIVATE chuse_decision)
+
     add_executable(state_fallback_probe tools/state_fallback_probe.cpp)
     target_link_libraries(state_fallback_probe PRIVATE chuse_decision)
 
     add_executable(derived_state_probe tools/derived_state_probe.cpp)
     target_link_libraries(derived_state_probe PRIVATE chuse_decision)
+
+    add_executable(derived_state_real_probe tools/derived_state_real_probe.cpp)
+    target_link_libraries(derived_state_real_probe PRIVATE chuse_decision)
 
     add_executable(latency_probe tools/latency_probe.cpp)
     target_link_libraries(latency_probe PRIVATE chuse_decision)
