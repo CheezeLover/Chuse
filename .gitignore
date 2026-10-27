@@ -26,3 +26,4 @@ app/src/main/assets/*.gguf
 *.jks
 *.keystore
 *.p12
+.codegraph/
